@@ -17,8 +17,8 @@ from pathlib import Path
 
 import pytest
 
-from ml_learning.harness import parser as parser_mod
-from ml_learning.harness.parser import parse_args, parse_bench_args, parse_sweep_args
+from ml_harness import parser as parser_mod
+from ml_harness.parser import parse_args, parse_bench_args, parse_sweep_args
 
 
 # ---- the absence ----------------------------------------------------------

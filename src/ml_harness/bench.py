@@ -40,7 +40,7 @@ from typing import Callable
 
 import torch
 
-from ml_learning.harness.config import RunConfig
+from ml_harness.config import RunConfig
 
 
 def make_sync(device) -> Callable[[], None]:

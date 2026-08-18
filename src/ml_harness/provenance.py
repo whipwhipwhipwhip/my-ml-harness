@@ -46,7 +46,7 @@ def find_git_dirty(REPO_ROOT):
 # history, which is exactly where reproducibility needs it most. Recording it
 # now means runs written either side of that move stay comparable. One line to
 # change when it happens.
-HARNESS_DISTRIBUTION = "ml_learning"
+HARNESS_DISTRIBUTION = "ml_harness"
 
 
 def _dist_version(name: str) -> str | None:

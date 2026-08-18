@@ -15,11 +15,11 @@ import math
 import pytest
 import torch
 
-from ml_learning.harness.testing import ARCHES, DATAS, load_data
-from ml_learning.harness.bench import BenchResult, benchmark, make_sync
-from ml_learning.harness.registry import load_run_config
+from ml_harness.testing import ARCHES, DATAS, load_data
+from ml_harness.bench import BenchResult, benchmark, make_sync
+from ml_harness.registry import load_run_config
 
-from tests.harness.test_loop import StubModel
+from tests.ml_harness.test_loop import StubModel
 
 DEVICE = torch.device("cpu")
 
@@ -112,7 +112,7 @@ def test_syncs_before_and_around_every_iteration(bench_harness, monkeypatch):
     """Without the sync, an async backend measures enqueue time, not compute."""
     calls = []
     monkeypatch.setattr(
-        "ml_learning.harness.bench.make_sync", lambda device: lambda: calls.append(1)
+        "ml_harness.bench.make_sync", lambda device: lambda: calls.append(1)
     )
     model, optimiser, data, cfg = bench_harness()
     benchmark(model, optimiser, data, cfg, DEVICE, n_iters=3, warmup=1)

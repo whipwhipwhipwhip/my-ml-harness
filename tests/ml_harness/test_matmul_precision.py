@@ -24,10 +24,10 @@ import json
 import pytest
 import torch
 
-from ml_learning.harness.testing import ARCHES, DATAS
-from ml_learning.harness.device import set_matmul_precision
-from ml_learning.harness.provenance import group_sha256
-from ml_learning.harness.registry import load_run_config
+from ml_harness.testing import ARCHES, DATAS
+from ml_harness.device import set_matmul_precision
+from ml_harness.provenance import group_sha256
+from ml_harness.registry import load_run_config
 
 
 @pytest.fixture(autouse=True)

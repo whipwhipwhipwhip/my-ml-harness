@@ -16,10 +16,10 @@ import math
 import pytest
 from dacite import exceptions as dacite_exc
 
-from ml_learning.harness.testing import ARCHES, DATAS
-from ml_learning.harness.config import ConstantScheduleConfig, CosineScheduleConfig
-from ml_learning.harness.registry import build_lr_schedule, load_run_config
-from ml_learning.harness.schedule import constant_schedule, cosine_schedule
+from ml_harness.testing import ARCHES, DATAS
+from ml_harness.config import ConstantScheduleConfig, CosineScheduleConfig
+from ml_harness.registry import build_lr_schedule, load_run_config
+from ml_harness.schedule import constant_schedule, cosine_schedule
 
 PEAK = 1e-3
 

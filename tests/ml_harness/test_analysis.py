@@ -10,7 +10,7 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from ml_learning.harness.analysis import (
+from ml_harness.analysis import (
     curves,
     group_key,
     run_table,

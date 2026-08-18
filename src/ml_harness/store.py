@@ -7,8 +7,8 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from ml_learning.harness.io import _write_json, _safe_load, _safe_write
-from ml_learning.harness.metrics import read_metrics
+from ml_harness.io import _write_json, _safe_load, _safe_write
+from ml_harness.metrics import read_metrics
 
 import pandas as pd
 

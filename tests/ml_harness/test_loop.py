@@ -15,9 +15,9 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
-from ml_learning.harness.testing import ARCHES, DATAS, FakeLogger, SpyEval, load_data
-from ml_learning.harness.loop import evaluate, train
-from ml_learning.harness.registry import load_run_config
+from ml_harness.testing import ARCHES, DATAS, FakeLogger, SpyEval, load_data
+from ml_harness.loop import evaluate, train
+from ml_harness.registry import load_run_config
 
 DEVICE = torch.device("cpu")
 

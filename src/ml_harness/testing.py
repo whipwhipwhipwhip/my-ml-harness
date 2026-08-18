@@ -33,9 +33,9 @@ from torch.nn import functional as F
 
 from tokenizers import CharTokenizer, Tokenizer, fingerprint
 
-from ml_learning.harness.cache import cache_path, load_tokens, save_tokens
-from ml_learning.harness.config import DataConfig, FileDataConfig, ModelConfig
-from ml_learning.harness.registry import ArchSpec
+from ml_harness.cache import cache_path, load_tokens, save_tokens
+from ml_harness.config import DataConfig, FileDataConfig, ModelConfig
+from ml_harness.registry import ArchSpec
 
 # ---- the model ------------------------------------------------------------
 

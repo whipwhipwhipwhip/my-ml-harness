@@ -15,9 +15,9 @@ import pytest
 import torch
 
 import tokenizers
-from ml_learning.harness.provenance import config_sha256, group_sha256
-from ml_learning.harness.registry import build_model, load_run_config
-from ml_learning.harness.store import RunDir, load_metrics, load_runs
+from ml_harness.provenance import config_sha256, group_sha256
+from ml_harness.registry import build_model, load_run_config
+from ml_harness.store import RunDir, load_metrics, load_runs
 from ml_learning.nanogpt_conor import train as train_mod
 from ml_learning.nanogpt_conor.arches import ARCHES
 from ml_learning.nanogpt_conor.datas import DATAS

@@ -37,7 +37,7 @@ import torch.nn as nn
 import torch.optim as opt
 from dacite import Config, from_dict
 
-from ml_learning.harness.config import(
+from ml_harness.config import(
     ByteConfig,
     CharConfig,
     CharFixedConfig,
@@ -55,7 +55,7 @@ from ml_learning.harness.config import(
     TokenizerConfig,
     TrainConfig,
 )
-from ml_learning.harness.schedule import (
+from ml_harness.schedule import (
     LRSchedule,
     constant_schedule,
     cosine_schedule,

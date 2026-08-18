@@ -16,8 +16,8 @@ import json
 import pytest
 from dacite import DaciteError
 
-from ml_learning.harness.testing import ARCHES, DATAS
-from ml_learning.harness.registry import apply_overrides, load_run_config
+from ml_harness.testing import ARCHES, DATAS
+from ml_harness.registry import apply_overrides, load_run_config
 
 
 def raw():

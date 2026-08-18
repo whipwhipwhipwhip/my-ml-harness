@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import copy
 
-from ml_learning.harness.provenance import config_sha256, group_sha256
+from ml_harness.provenance import config_sha256, group_sha256
 
 
 def cfg(**overrides) -> dict:

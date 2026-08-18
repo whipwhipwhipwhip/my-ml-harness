@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from ml_learning.harness.provenance import GROUP_EXCLUDES
+from ml_harness.provenance import GROUP_EXCLUDES
 
 # A run frame is ~70 columns wide, most of which are identical across every run
 # in it. These are the ones worth seeing even when they don't vary.

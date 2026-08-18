@@ -26,7 +26,7 @@ from __future__ import annotations
 import math
 from typing import Callable
 
-from ml_learning.harness.config import ConstantScheduleConfig, CosineScheduleConfig
+from ml_harness.config import ConstantScheduleConfig, CosineScheduleConfig
 
 LRSchedule = Callable[[int], float]
 

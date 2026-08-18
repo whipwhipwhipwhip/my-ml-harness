@@ -13,15 +13,15 @@ import json
 import pytest
 from dacite import DaciteError
 
-from ml_learning.harness.testing import ARCHES, DATAS
-from ml_learning.harness.config import (
+from ml_harness.testing import ARCHES, DATAS
+from ml_harness.config import (
     ByteConfig,
     CharConfig,
     CharFixedConfig,
     RegexBPEConfig,
     TiktokenConfig,
 )
-from ml_learning.harness.registry import TOKENIZERS, build_tokenizer, load_run_config
+from ml_harness.registry import TOKENIZERS, build_tokenizer, load_run_config
 from tokenizers import (
     ByteTokenizer,
     CharTokenizer,

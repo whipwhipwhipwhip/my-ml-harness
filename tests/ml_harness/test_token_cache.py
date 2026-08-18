@@ -16,9 +16,9 @@ import json
 import pytest
 import torch
 
-from ml_learning.harness import cache as cache_mod
-from ml_learning.harness.testing import load_data
-from ml_learning.harness.cache import cache_path, load_tokens, save_tokens
+from ml_harness import cache as cache_mod
+from ml_harness.testing import load_data
+from ml_harness.cache import cache_path, load_tokens, save_tokens
 from tokenizers import ByteTokenizer, CharTokenizer, fingerprint
 
 TEXT = "the theatre of the theory " * 20

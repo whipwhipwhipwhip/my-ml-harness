@@ -30,7 +30,7 @@ from typing import Any, Callable, Protocol, Sequence
 
 from dacite import Config, from_dict
 
-from ml_learning.harness.io import _safe_load, _write_json
+from ml_harness.io import _safe_load, _write_json
 
 # Same strictness as the run configs, and for the same reason: a misspelled key
 # in a sweep file is a sweep that quietly doesn't vary what you meant.

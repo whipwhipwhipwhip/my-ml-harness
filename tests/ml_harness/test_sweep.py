@@ -17,8 +17,8 @@ from pathlib import Path
 
 import pytest
 
-from ml_learning.harness.store import RunDir, load_runs
-from ml_learning.harness.sweep import (
+from ml_harness.store import RunDir, load_runs
+from ml_harness.sweep import (
     SweepConfig,
     describe,
     expand,
@@ -39,7 +39,7 @@ def spec(**overrides) -> SweepConfig:
 def test_values_round_trip_through_the_override_parser():
     """The sweep's only contract with `apply_overrides` is the string. If these
     don't survive `_parse_value`, the config gets a value the sweep never meant."""
-    from ml_learning.harness.registry import _parse_value
+    from ml_harness.registry import _parse_value
 
     for value in (1e-3, 4, True, None, "mps", "\nROMEO:", [1, 2]):
         key, text = to_override("k", value).split("=", 1)
@@ -287,7 +287,7 @@ def test_two_sweeps_cannot_share_a_directory(tmp_path, monkeypatch):
     """`mkdir` without exist_ok: two sweeps interleaving their records into one
     directory is worse than a loud failure. The clock is frozen because that's
     the only thing keeping two same-named sweeps apart."""
-    import ml_learning.harness.sweep as sweep_mod
+    import ml_harness.sweep as sweep_mod
 
     class Frozen(datetime):
         @classmethod

@@ -25,11 +25,11 @@ import pytest
 import torch
 import torch.nn as nn
 
-from ml_learning.harness.testing import ARCHES, DATAS
-from ml_learning.harness.device import compile_model
-from ml_learning.harness.provenance import group_sha256
-from ml_learning.harness import runner
-from ml_learning.harness.registry import load_run_config
+from ml_harness.testing import ARCHES, DATAS
+from ml_harness.device import compile_model
+from ml_harness.provenance import group_sha256
+from ml_harness import runner
+from ml_harness.registry import load_run_config
 
 
 class FakeOptimizedModule(nn.Module):
@@ -160,7 +160,7 @@ def test_a_compiled_runs_checkpoint_loads_into_a_plain_model(
     checkpoint of *the model*, loadable by anything that rebuilds from config."""
     # Deferred — see the module docstring.
     from ml_learning.nanogpt_conor import train as entry
-    from ml_learning.harness.registry import build_model
+    from ml_harness.registry import build_model
     # nanogpt's tables, not the reference ones: this test rebuilds the model the
     # entry point trained, so it has to resolve the same `arch` tag that ran.
     from ml_learning.nanogpt_conor.arches import ARCHES as GPT_ARCHES

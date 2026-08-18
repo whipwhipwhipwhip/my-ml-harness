@@ -20,7 +20,7 @@ import contextlib
 
 import torch
 
-from ml_learning.harness.config import RunConfig
+from ml_harness.config import RunConfig
 
 
 @torch.no_grad()

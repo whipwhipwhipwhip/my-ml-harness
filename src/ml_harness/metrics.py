@@ -4,7 +4,7 @@ import json
 import time
 import warnings
 
-from ml_learning.harness.io import _safe_loads
+from ml_harness.io import _safe_loads
 
 # Note - should be constructed before training loop,
 # which should be wired in somehow

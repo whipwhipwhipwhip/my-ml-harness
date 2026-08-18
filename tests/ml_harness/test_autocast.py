@@ -22,14 +22,14 @@ import math
 import pytest
 import torch
 
-from ml_learning.harness.testing import ARCHES, DATAS
-from ml_learning.harness.device import autocast_context
-from ml_learning.harness.loop import evaluate, train
-from ml_learning.harness.provenance import group_sha256
-from ml_learning.harness.registry import load_run_config
+from ml_harness.testing import ARCHES, DATAS
+from ml_harness.device import autocast_context
+from ml_harness.loop import evaluate, train
+from ml_harness.provenance import group_sha256
+from ml_harness.registry import load_run_config
 
-from ml_learning.harness.testing import FakeLogger, SpyEval  # noqa: F401
-from tests.harness.test_loop import StubModel, harness  # noqa: F401
+from ml_harness.testing import FakeLogger, SpyEval  # noqa: F401
+from tests.ml_harness.test_loop import StubModel, harness  # noqa: F401
 
 DEVICE = torch.device("cpu")
 

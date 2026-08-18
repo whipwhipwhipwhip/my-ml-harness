@@ -36,19 +36,19 @@ from typing import Any, Iterator, NamedTuple
 
 import torch
 
-from ml_learning.harness.config import RunConfig
-from ml_learning.harness.device import compile_model
-from ml_learning.harness.metrics import summarize
-from ml_learning.harness.provenance import collect_provenance
-from ml_learning.harness.registry import (
+from ml_harness.config import RunConfig
+from ml_harness.device import compile_model
+from ml_harness.metrics import summarize
+from ml_harness.provenance import collect_provenance
+from ml_harness.registry import (
     ArchSpec,
     build_lr_schedule,
     build_model,
     build_optimiser,
 )
-from ml_learning.harness.seeding import make_generator, seed_everything
-from ml_learning.harness.store import RunDir, new_run, write_status, write_summary
-from ml_learning.harness.io import _write_json
+from ml_harness.seeding import make_generator, seed_everything
+from ml_harness.store import RunDir, new_run, write_status, write_summary
+from ml_harness.io import _write_json
 
 
 class BuiltRun(NamedTuple):

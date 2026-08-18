@@ -30,7 +30,7 @@ from typing import Sequence
 
 import numpy as np
 
-from ml_learning.harness.io import _write_json
+from ml_harness.io import _write_json
 
 # Bump when *this* repo's encode path changes meaning. See the module docstring.
 CACHE_VERSION = 2

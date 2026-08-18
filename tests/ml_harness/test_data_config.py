@@ -18,8 +18,8 @@ import json
 import pytest
 from dacite import DaciteError
 
-from ml_learning.harness.config import FileDataConfig
-from ml_learning.harness.registry import load_run_config
+from ml_harness.config import FileDataConfig
+from ml_harness.registry import load_run_config
 from ml_learning.gpt_addition.arches import ARCHES as ADDITION_ARCHES
 from ml_learning.gpt_addition.data import AdditionDataConfig
 from ml_learning.gpt_addition.datas import DATAS as ADDITION_DATAS

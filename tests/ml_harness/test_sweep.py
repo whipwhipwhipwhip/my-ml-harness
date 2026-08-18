@@ -134,20 +134,6 @@ def test_a_typod_sweep_key_is_rejected_at_load(tmp_path):
         load_sweep_config(path)
 
 
-def test_the_shipped_sweep_parses():
-    """The one thing a test should assert about a shipped config file.
-
-    The path is spelled out here rather than imported from `harness.parser`,
-    which used to export a `SWEEP_ROOT` derived from its own `__file__`. That
-    constant is gone: the harness resolves no paths, so a test that wants a file
-    in *this* repo has to say which repo it means.
-    """
-    from ml_learning.nanogpt_conor.train import CONFIG_ROOT
-
-    loaded = load_sweep_config(CONFIG_ROOT / "sweeps" / "lr_depth.json")
-    assert len(expand(loaded)) == 18
-
-
 # ---- the driver, against a fake run ---------------------------------------
 
 class FakeRun:
@@ -303,18 +289,18 @@ def test_two_sweeps_cannot_share_a_directory(tmp_path, monkeypatch):
 
 # ---- one real run ---------------------------------------------------------
 
-def test_a_sweep_produces_readable_runs(tmp_path, gpt_config_path, runs_root):
+def test_a_sweep_produces_readable_runs(tmp_path, config_path, runs_root):
     """The expensive tier: proves the injection fits the *entry point's* run,
     not just the fake, and that `load_runs(sweep_dir)` is the sweep's frame."""
     from functools import partial
 
-    from ml_learning.nanogpt_conor.train import run
+    from ml_harness.testing import run
 
     out = run_sweep(
-        SweepConfig(name="real", base=gpt_config_path.name, grid={"optim.lr": [1e-3, 1e-2]}),
+        SweepConfig(name="real", base=config_path.name, grid={"optim.lr": [1e-3, 1e-2]}),
         partial(run, cache_dir=None),
         runs_root,
-        gpt_config_path.parent,
+        config_path.parent,
         on_point=lambda _: None,
     )
 

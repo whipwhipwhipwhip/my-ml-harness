@@ -1,4 +1,4 @@
-"""`--set` handling: the raw-dict rewrite in harness/registry.py.
+"""`--set` handling: the raw-dict rewrite in ml_harness/registry.py.
 
 Two layers, tested separately:
   * apply_overrides on its own — the errors it raises itself, and the value parsing
@@ -151,19 +151,3 @@ def test_config_file_is_not_modified_on_disk(config_path):
     before = config_path.read_text()
     load_run_config(config_path, ARCHES, DATAS, ["model.n_layer=3"])
     assert config_path.read_text() == before
-
-
-def test_shipped_config_parses():
-    """The one thing these tests should assert about configs/GPT.json.
-
-    The only test in this module that reaches for nanogpt's tables rather than
-    the reference ones, because it's the only one whose subject is a real
-    project's config file. Everything above is about `load_run_config` itself and
-    would run unchanged in a repo with no GPT in it.
-    """
-    from ml_learning.nanogpt_conor.arches import ARCHES as GPT_ARCHES
-    from ml_learning.nanogpt_conor.datas import DATAS as GPT_DATAS
-
-    cfg = load_run_config("configs/GPT.json", GPT_ARCHES, GPT_DATAS)
-    assert cfg.arch in GPT_ARCHES
-    assert cfg.model.n_embd % cfg.model.n_head == 0

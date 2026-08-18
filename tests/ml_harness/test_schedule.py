@@ -1,4 +1,4 @@
-"""harness/schedule.py — arithmetic, so these are arithmetic tests.
+"""ml_harness/schedule.py — arithmetic, so these are arithmetic tests.
 
 No model, no optimiser, no tmpdir, no torch. That's the point of the schedule
 being a closure over three numbers: "what lr does step 700 get" is answerable in

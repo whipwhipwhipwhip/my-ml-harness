@@ -1,10 +1,10 @@
 """Atomic writes and non-raising reads — the harness's whole filesystem vocabulary.
 
-Copied from `ml_learning/utils/io.py` rather than imported from it, so that
-`harness/` depends on nothing in this repo outside its own directory and the
-`tokenizers` package. `utils/` stays where it is: the micrograd half and
-`makemore_conor` still use it, and the ~30 lines here are cheaper than a shared
-package that exists only to be shared.
+Copied from the origin repo's `utils/io.py` rather than imported from it, so that
+`ml_harness/` depends on nothing outside its own directory and the `tokenizers`
+package. That copy is what made this package extractable at all: ~30 lines here
+are cheaper than a shared package that exists only to be shared. Don't undo it by
+reaching for a utility library — one grep is the whole invariant.
 
 Two ideas, both about what a killed process leaves behind:
 

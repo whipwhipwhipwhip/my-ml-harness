@@ -6,7 +6,7 @@ a sweep is validated by exactly the path a hand-typed config value is —
 fails at load like a typo'd JSON key, and this module needs no schema of its own
 for the things it varies. `--smoke` reuses the same trick for the same reason.
 
-Generic, like the rest of `harness/`: it names no model and no task. `run_fn` is
+Generic, like the rest of `ml_harness/`: it names no model and no task. `run_fn` is
 injected the way `ARCHES` and `DATAS` are, because the thing that knows how to do
 one run is a project entry point (`nanogpt_conor.train.run`) and an import of it
 here would be the back-arrow the layering rule exists to prevent. The two entry

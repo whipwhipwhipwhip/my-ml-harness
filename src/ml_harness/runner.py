@@ -19,7 +19,7 @@ surface `loop.py` already relies on:
     data.tokenizer     with .vocab_size, .to_dict()
     data.sha256        content hash of the corpus, for provenance
 
-Same rule as everywhere else in `harness/`: `ARCHES` is passed in, never
+Same rule as everywhere else in `ml_harness/`: `ARCHES` is passed in, never
 imported, so this module names no model. Torch lives here (it saves
 checkpoints), which is why none of it went into the torch-free `store.py`.
 """

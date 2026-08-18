@@ -8,13 +8,13 @@ would try each member in turn and take the first that fits, ignoring the tag.
 
 The mechanism only: the `ARCHES` table itself lives with the arches
 (`nanogpt_conor/arches.py`) and arrives here as a parameter, so nothing in this
-module names GPTConfig or GPTModel and `harness/` stays arch-agnostic. `DATAS` is
+module names GPTConfig or GPTModel and `ml_harness/` stays arch-agnostic. `DATAS` is
 passed in for the same reason and by the same route — `gpt_addition`'s dataset
 config names a task, and an import of it here would be the back-arrow the
 layering rule exists to prevent. `OPTIMS` and `TOKENIZERS` are the deliberate
 asymmetries — AdamW is torch and `tokenizers` is a generic peer
 package, so neither is project-specific and both tables live here. The line is
-"does `harness/` have to name a *model* or a *task*", and it still doesn't.
+"does `ml_harness/` have to name a *model* or a *task*", and it still doesn't.
 
 `DATAS` maps to a config class rather than to a spec pair, unlike the other
 three. The tag doesn't dispatch: an entry point already imports the one

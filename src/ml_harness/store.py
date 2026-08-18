@@ -16,7 +16,7 @@ import pandas as pd
 def flatten_dict(d: dict, prefix: str = "") -> dict:
     """`{"model": {"n_layer": 4}}` -> `{"model.n_layer": 4}`.
 
-    Lives here rather than in a shared utils package so `harness/` depends on
+    Lives here rather than in a shared utils package so `ml_harness/` depends on
     nothing outside its own directory. Its one caller is `load_runs`, where it
     turns a nested config into the flat columns that make `df["config.optim.lr"]`
     a thing you can group by — the dotted names deliberately match what `--set`

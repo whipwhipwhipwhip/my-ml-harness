@@ -9,34 +9,36 @@ A standalone extraction of the experiment harness that grew inside `~/code/learn
 training loop, run records, sweeps, benchmarking, analysis — that names **no model and no
 task**. Downstream projects supply those.
 
-**The extraction is partly done.** `src/ml_harness/` and `tests/ml_harness/` began as
-byte-for-byte copies of `learning_ml`'s `src/ml_learning/harness/` and `tests/harness/`.
-The package now imports and 227 of 240 tests pass. What is landed, and what is left:
+**The extraction is complete and the suite is green** (238 tests, ~2.5s).
+`src/ml_harness/` and `tests/ml_harness/` began as byte-for-byte copies of
+`learning_ml`'s `src/ml_learning/harness/` and `tests/harness/`; what changed since:
 
-Landed — the package is self-contained and installable:
-- All `ml_learning.harness.*` imports renamed to `ml_harness.*`, and `tests.harness.*` to
-  `tests.ml_harness.*` (`test_bench.py` and `test_autocast.py` share `test_loop.py`'s
-  `StubModel`; `pythonpath = ["."]` is what makes a `tests.*` import work).
-- `provenance.py::HARNESS_DISTRIBUTION` is now `"ml_harness"`, so a run records the version
-  of the distribution that actually shipped the harness.
-- Dependencies slimmed to what is imported — numpy, pandas, torch, dacite, tokenizers, with
-  pytest in a `dev` dependency group. `[tool.uv.sources]` pins `tokenizers` to the local
-  package (`whipwhipwhipwhip/my-tokenizers`); HuggingFace's PyPI package of the same name is
-  **not** a substitute, since the code wants `CharTokenizer`, `ByteTokenizer`,
-  `RegexTokenizer`, `TiktokenBPETokenizer`, `NO_SPLIT_PATTERN` and `fingerprint`.
+- Imports renamed to `ml_harness.*` / `tests.ml_harness.*`, and
+  `provenance.py::HARNESS_DISTRIBUTION` to `"ml_harness"` so a run records the version of
+  the distribution that actually shipped the harness (it was silently recording `None`).
+- Dependencies cut from 16 to 5 — numpy, pandas, torch, dacite, tokenizers — with pytest in
+  a `dev` group. `[tool.uv.sources]` pins `tokenizers` to the local package; HuggingFace's
+  PyPI package of the same name is **not** a substitute, since the code wants
+  `CharTokenizer`, `ByteTokenizer`, `RegexTokenizer`, `TiktokenBPETokenizer`,
+  `NO_SPLIT_PATTERN` and `fingerprint`.
+- `testing.py` gained `run()` and `EvalRecorder` — the reference entry point. This is the
+  change to know about: the tests that assert on the *record* (autocast dtypes, the compile
+  checkpoint hazard, matmul precision, a real sweep) previously drove
+  `nanogpt_conor.train.run`, and now drive a `run()` the package ships. It completes what
+  `testing.py` already claimed to be — the worked answer to "what must I supply" — and keeps
+  the harness able to test its own record lifecycle with no project present.
+- Deleted: `test_run_record.py` and `test_data_config.py` (both wholly about a project's
+  entry point and two projects' `DATAS` tables), and the two `test_shipped_config_parses` /
+  `test_the_shipped_sweep_parses` cases, whose subject was a config file in the origin repo
+  that has no counterpart here. `conftest.py`'s `gpt_config_path` fixture went with them.
+- Docstrings that were about the old home were corrected where they had become *false*
+  (`io.py` on what it was copied from, `provenance.py` on a move that has now happened).
+  Mentions of `nanogpt_conor` / `gpt_addition` as the two projects that motivated an
+  abstraction were left alone — that history is why the seams are where they are.
 
-Left — the tests that need a project this repo does not have:
-- 13 failures and 2 uncollectable modules, all from `ml_learning.nanogpt_conor` /
-  `ml_learning.gpt_addition` imports: `test_run_record.py` and `test_data_config.py` fail at
-  collection, and entry-point tests inside `test_autocast.py`, `test_compile.py`,
-  `test_matmul_precision.py`, `test_overrides.py` and `test_sweep.py` fail in the body.
-  `conftest.py`'s `gpt_config_path` fixture is the shared root. `testing.py` exists precisely
-  so these can be rewritten against the reference arch — see **Testing** below. Two of them
-  (`test_shipped_config_parses`, `test_the_shipped_sweep_parses`) assert on config files that
-  live in the origin repo and have no counterpart here.
-- Module docstrings still describe the harness in its old home — `nanogpt_conor/train.py` as
-  the caller, `ml_learning/utils/io.py` as `io.py`'s source. The prose is accurate about
-  *why* each decision was made; only the paths are stale.
+Still worth knowing: this package ships no `configs/` directory, so nothing tests a real
+config file end to end; and `parse_args`' `--smoke` has no shipped override table, because
+the overrides that shrink a model name that model's fields. Both are a project's business.
 
 `~/code/learning_ml/CLAUDE.md` documents the harness in its original home and is the
 reference for anything not covered here.
@@ -54,12 +56,7 @@ uv run pytest tests/ml_harness/test_loop.py -k schedule # one test / pattern
 ```
 
 `uv sync` installs the `dev` group too, so `pytest` comes with it; it is not importable
-from the ambient python. Until the project-coupled tests are rewritten, a clean run is:
-
-```bash
-uv run pytest -q --ignore=tests/ml_harness/test_data_config.py \
-                 --ignore=tests/ml_harness/test_run_record.py
-```
+from the ambient python.
 
 Gitignored, and therefore invisible: `docs/`, `runs/`, `notebooks/`, `.cache/`, `skills/`,
 and **all `*.txt`** — which is why every run records a data `sha256`.
@@ -148,9 +145,12 @@ directory plus `tokenizers`; don't reintroduce such an import.
 - [testing.py](src/ml_harness/testing.py) — a complete, minimal *project* to run the harness
   against: `TinyConfig`/`TinyModel` (a real one-block transformer — small enough to be
   pointless, complete enough to checkpoint, compile and generate from), `ARCHES`, `DATAS`, a
-  `load_data`, and the `FakeLogger`/`SpyEval` collaborators. Shipped rather than left in
-  `tests/` because it is also the worked answer to "what must I supply to wire in a model".
-  It imports no pytest and defines no fixtures.
+  `load_data`, `EvalRecorder`/`run()` (the reference entry point — parse, build, train,
+  persist, matching `sweep.RunFn`'s `(config_path, overrides, runs_root) -> RunDir`), and
+  the `FakeLogger`/`SpyEval` collaborators. Shipped rather than left in `tests/` because it
+  is also the worked answer to "what must I supply to wire in a model". It imports no pytest
+  and defines no fixtures. **`run()` is the reference, not a default** — a real project's
+  `train.py` adds argparse, its own paths and its own smoke overrides on top of this shape.
 - [metrics.py](src/ml_harness/metrics.py) — `MetricLogger` appends line-buffered JSONL;
   `read_rows`/`read_metrics` tolerate the truncated final line a killed run leaves;
   `summarize` reads it back into final/min/max per `(split, metric)`.
@@ -209,14 +209,14 @@ question:
   driver against a fake `run_fn` that writes only a `status.json`: `test_loop.py`,
   `test_sweep.py`, `test_bench.py`. **If a loop test starts needing a tmpdir or a real
   model, that module has grown a dependency it shouldn't have.**
-- A real `run()` into `tmp_path`, asserting on the *record* (files written, effective config
-  persisted, tokenizer rebuildable, checkpoints reload, crash and Ctrl-C paths) rather than
-  on learning: `test_run_record.py`. Most of the suite's wall time.
+- `testing.run()` into `tmp_path`, asserting on the *record* rather than on learning: the
+  entry-point sections of `test_autocast.py`, `test_compile.py`, `test_matmul_precision.py`,
+  and `test_sweep.py`'s one real sweep. Most of the suite's wall time.
 
-**The portability rule, and it is mechanical: a test uses the `config_path` fixture (the
-`testing.py` reference arch) unless its subject genuinely is a project's entry point.** That
-rule is what made this extraction possible, and it is also what the remaining
-`ml_learning.nanogpt_conor` imports violate now that no such project exists here.
+**The portability rule, and it is mechanical: every test drives `ml_harness` and nothing
+else.** `config_path` is the only config fixture and it builds the reference arch. That rule
+is what made this extraction possible in the first place — with the two projects made
+unimportable, 227 of 240 tests already passed before a line was rewritten.
 
 `conftest.py` synthesises both the corpus and the config into `tmp_path`, so the suite reads
 nothing real — no `runs/`, no corpus file, no shipped config. Note `data.cache: false` in the

@@ -27,19 +27,14 @@ def corpus_path(tmp_path):
 
 
 def _config(corpus_path, arch: str, model: dict) -> dict:
-    """A complete run config, deliberately not `configs/GPT.json`.
+    """A complete run config, synthesised into tmp_path.
 
-    Hermetic: editing the real config can't break these tests, and these tests
-    can't discourage editing it. `test_shipped_config_parses` covers that file
-    separately, which is the only thing about it a test should care about.
+    Hermetic by construction: this package ships no config files, and a test that
+    reached for one in a downstream project would be exactly the dependency the
+    layering rule forbids.
 
-    The absolute data path matters — `train.run` does `REPO_ROOT / cfg.data.path`,
-    and `/` with an absolute right-hand side discards the left, so this points
-    where it says it does.
-
-    Only `arch` and the `model` block vary between the two fixtures below;
-    everything else is the same run, which is the point — a test that isn't
-    about the architecture shouldn't be able to tell which one it got.
+    `data.path` is absolute, which is what lets an entry point read it without
+    resolving anything — the harness resolves no path it wasn't given.
     """
     return {
         "arch": arch,
@@ -69,12 +64,12 @@ def _config(corpus_path, arch: str, model: dict) -> dict:
 
 @pytest.fixture
 def config_path(tmp_path, corpus_path):
-    """The default: a run against `harness/testing.py`'s reference arch.
+    """A run against `ml_harness/testing.py`'s reference arch.
 
-    Named without qualification because this is what a harness test should reach
-    for. Nothing in `harness/` knows what a GPT is, so nothing testing `harness/`
-    should need one — and every test on this fixture is one that would still run
-    if the harness moved to a repo where `nanogpt_conor` doesn't exist.
+    The only config fixture, and named without qualification because it is what
+    every test here reaches for. Nothing in `ml_harness/` knows what a GPT is, so
+    nothing testing `ml_harness/` needs one — which is the property that let this
+    package be lifted out of the repo it grew in, and the one to preserve.
     """
     cfg = _config(
         corpus_path,
@@ -82,24 +77,6 @@ def config_path(tmp_path, corpus_path):
         {"n_embd": 16, "n_head": 2, "n_layer": 1, "dropout": 0.0, "block_size": 8},
     )
     path = tmp_path / "config.json"
-    path.write_text(json.dumps(cfg), encoding="utf-8")
-    return path
-
-
-@pytest.fixture
-def gpt_config_path(tmp_path, corpus_path):
-    """The same run, against nanogpt's real arch.
-
-    For the tests that drive a project's `run()` end to end rather than the
-    harness's own machinery — they're asserting that the *entry point* wires up,
-    which needs a real one. Reach for `config_path` unless that's the question.
-    """
-    cfg = _config(
-        corpus_path,
-        "gpt",
-        {"n_embd": 16, "n_head": 2, "n_layer": 2, "dropout": 0.0, "block_size": 8},
-    )
-    path = tmp_path / "gpt_config.json"
     path.write_text(json.dumps(cfg), encoding="utf-8")
     return path
 

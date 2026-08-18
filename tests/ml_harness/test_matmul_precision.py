@@ -11,10 +11,10 @@ vacuous. What's asserted is that the value reaches torch, that a bad one is
 rejected next to the config that named it, and that the run record says which
 precision produced its numbers.
 
-The handful of tests that drive a real `run()` import the entry point inside
-the test body rather than at module scope. That's what keeps the rest of this
-file collectable in a repo with no nanogpt in it: their subject is a project's
-entry point, everything else here is the harness itself.
+The tests that drive a real `run()` use `testing.run`, the reference entry point
+shipped beside the reference arch. They are the expensive tier of this module —
+they write a run directory — but they need no project, so the portability rule
+holds: nothing here imports anything the harness doesn't ship.
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ import json
 import pytest
 import torch
 
-from ml_harness.testing import ARCHES, DATAS
+from ml_harness.testing import ARCHES, DATAS, run
 from ml_harness.device import set_matmul_precision
 from ml_harness.provenance import group_sha256
 from ml_harness.registry import load_run_config
@@ -104,11 +104,9 @@ def test_seeds_still_share_a_group_at_one_precision():
 
 # ---- the entry point ------------------------------------------------------
 
-def test_run_applies_the_configured_precision(gpt_config_path, runs_root):
-    # Deferred — see the module docstring.
-    from ml_learning.nanogpt_conor import train
-    rd = train.run(
-        gpt_config_path,
+def test_run_applies_the_configured_precision(config_path, runs_root):
+    rd = run(
+        config_path,
         overrides=["runtime.matmul_precision=high"],
         runs_root=runs_root,
         cache_dir=None,
@@ -119,24 +117,20 @@ def test_run_applies_the_configured_precision(gpt_config_path, runs_root):
     assert recorded["runtime"]["matmul_precision"] == "high"
 
 
-def test_run_sets_the_default_rather_than_inheriting(gpt_config_path, runs_root):
+def test_run_sets_the_default_rather_than_inheriting(config_path, runs_root):
     """The sweep case: many runs in one process, so a run that doesn't mention
     precision must still assert its own, not inherit the previous point's."""
-    # Deferred — see the module docstring.
-    from ml_learning.nanogpt_conor import train
     torch.set_float32_matmul_precision("high")
 
-    train.run(gpt_config_path, runs_root=runs_root, cache_dir=None)
+    run(config_path, runs_root=runs_root, cache_dir=None)
 
     assert torch.get_float32_matmul_precision() == "highest"
 
 
-def test_an_unknown_precision_fails_the_run(gpt_config_path, runs_root):
-    # Deferred — see the module docstring.
-    from ml_learning.nanogpt_conor import train
+def test_an_unknown_precision_fails_the_run(config_path, runs_root):
     with pytest.raises(RuntimeError, match="Unknown matmul precision"):
-        train.run(
-            gpt_config_path,
+        run(
+            config_path,
             overrides=["runtime.matmul_precision=fastest"],
             runs_root=runs_root,
             cache_dir=None,

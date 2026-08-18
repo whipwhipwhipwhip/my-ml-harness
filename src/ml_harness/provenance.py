@@ -15,7 +15,7 @@ from tokenizers import Tokenizer, fingerprint
 def git(REPO_ROOT, *args: str) -> str | None:
     """Run a git command in `REPO_ROOT`, or None if it fails for any reason.
 
-    Lives here rather than in a shared utils package so `harness/` depends on
+    Lives here rather than in a shared utils package so `ml_harness/` depends on
     nothing outside its own directory. None on failure because every use is
     provenance: a run from a tarball with no `.git`, or a machine with no git
     installed, is still a run, and "we couldn't tell" is a truthful record
@@ -39,13 +39,11 @@ def find_git_dirty(REPO_ROOT):
     is_dirty = git(REPO_ROOT, "status", "--porcelain")
     return bool(is_dirty) if is_dirty else None
 
-# The distribution that ships `harness/`. Today that's this repo, so
-# `harness_version` says the same thing `git_sha` already does; the field exists
-# for what happens when the harness moves to its own package and `git_sha`
-# stops covering it — a pinned dependency's code is invisible to this repo's
-# history, which is exactly where reproducibility needs it most. Recording it
-# now means runs written either side of that move stay comparable. One line to
-# change when it happens.
+# The distribution that ships `ml_harness/`. This is now its own package, which
+# is exactly the case the field was added for: a downstream project pins the
+# harness as a dependency, so the harness's code is invisible to *that* repo's
+# `git_sha`, which is where reproducibility needs it most. Runs written either
+# side of the split stay comparable because both record this.
 HARNESS_DISTRIBUTION = "ml_harness"
 
 

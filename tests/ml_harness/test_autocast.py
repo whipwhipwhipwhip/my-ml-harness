@@ -7,10 +7,10 @@ activations become bf16, and parameters and their gradients do not. If a future
 edit moves `backward()` inside the context, or casts the model instead of its
 inputs, those are the tests that notice.
 
-The handful of tests that drive a real `run()` import the entry point inside
-the test body rather than at module scope. That's what keeps the rest of this
-file collectable in a repo with no nanogpt in it: their subject is a project's
-entry point, everything else here is the harness itself.
+The tests that drive a real `run()` use `testing.run`, the reference entry point
+shipped beside the reference arch. They are the expensive tier of this module —
+they write a run directory — but they need no project, so the portability rule
+holds: nothing here imports anything the harness doesn't ship.
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ import math
 import pytest
 import torch
 
-from ml_harness.testing import ARCHES, DATAS
+from ml_harness.testing import ARCHES, DATAS, run
 from ml_harness.device import autocast_context
 from ml_harness.loop import evaluate, train
 from ml_harness.provenance import group_sha256
@@ -159,11 +159,9 @@ def test_two_dtypes_are_two_experiments():
 
 # ---- the entry point ------------------------------------------------------
 
-def test_run_records_the_dtype_it_trained_in(gpt_config_path, runs_root):
-    # Deferred — see the module docstring.
-    from ml_learning.nanogpt_conor import train as entry
-    rd = entry.run(
-        gpt_config_path,
+def test_run_records_the_dtype_it_trained_in(config_path, runs_root):
+    rd = run(
+        config_path,
         overrides=['runtime.autocast_dtype="bf16"'],
         runs_root=runs_root,
         cache_dir=None,
@@ -172,12 +170,10 @@ def test_run_records_the_dtype_it_trained_in(gpt_config_path, runs_root):
     assert recorded["runtime"]["autocast_dtype"] == "bf16"
 
 
-def test_a_bf16_run_writes_an_fp32_checkpoint(gpt_config_path, runs_root):
+def test_a_bf16_run_writes_an_fp32_checkpoint(config_path, runs_root):
     """The parameters were never cast, so a bf16 run reloads like any other."""
-    # Deferred — see the module docstring.
-    from ml_learning.nanogpt_conor import train as entry
-    rd = entry.run(
-        gpt_config_path,
+    rd = run(
+        config_path,
         overrides=['runtime.autocast_dtype="bf16"'],
         runs_root=runs_root,
         cache_dir=None,
@@ -186,14 +182,12 @@ def test_a_bf16_run_writes_an_fp32_checkpoint(gpt_config_path, runs_root):
     assert all(t.dtype is torch.float32 for t in ckpt["model"].values())
 
 
-def test_a_bad_dtype_fails_before_a_run_directory_exists(gpt_config_path, runs_root):
+def test_a_bad_dtype_fails_before_a_run_directory_exists(config_path, runs_root):
     """Validated next to the device, not at the call site: a typo shouldn't leave
     a failed run behind."""
-    # Deferred — see the module docstring.
-    from ml_learning.nanogpt_conor import train as entry
     with pytest.raises(RuntimeError, match="Unknown autocast dtype"):
-        entry.run(
-            gpt_config_path,
+        run(
+            config_path,
             overrides=['runtime.autocast_dtype="bfloat16"'],
             runs_root=runs_root,
             cache_dir=None,

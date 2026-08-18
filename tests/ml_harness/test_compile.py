@@ -11,10 +11,10 @@ wiring test substitutes a fake wrapper with the one property that matters:
 `torch.compile` itself is lazy — it wraps now and compiles on the first forward —
 so the tests that only inspect the wrapper are free and use the real thing.
 
-The handful of tests that drive a real `run()` import the entry point inside
-the test body rather than at module scope. That's what keeps the rest of this
-file collectable in a repo with no nanogpt in it: their subject is a project's
-entry point, everything else here is the harness itself.
+The tests that drive a real `run()` use `testing.run`, the reference entry point
+shipped beside the reference arch. They are the expensive tier of this module —
+they write a run directory — but they need no project, so the portability rule
+holds: nothing here imports anything the harness doesn't ship.
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ import pytest
 import torch
 import torch.nn as nn
 
-from ml_harness.testing import ARCHES, DATAS
+from ml_harness.testing import ARCHES, DATAS, run
 from ml_harness.device import compile_model
 from ml_harness.provenance import group_sha256
 from ml_harness import runner
@@ -136,12 +136,10 @@ def fake_compile(monkeypatch):
     return calls
 
 
-def test_run_checkpoints_the_uncompiled_module(gpt_config_path, runs_root, fake_compile):
+def test_run_checkpoints_the_uncompiled_module(config_path, runs_root, fake_compile):
     """The regression this whole two-name dance exists to prevent."""
-    # Deferred — see the module docstring.
-    from ml_learning.nanogpt_conor import train as entry
-    rd = entry.run(
-        gpt_config_path,
+    rd = run(
+        config_path,
         overrides=["runtime.compile=true"],
         runs_root=runs_root,
         cache_dir=None,
@@ -154,38 +152,32 @@ def test_run_checkpoints_the_uncompiled_module(gpt_config_path, runs_root, fake_
 
 
 def test_a_compiled_runs_checkpoint_loads_into_a_plain_model(
-    gpt_config_path, runs_root, fake_compile
+    config_path, runs_root, fake_compile
 ):
     """The consequence that matters: a compiled run's checkpoint is still a
     checkpoint of *the model*, loadable by anything that rebuilds from config."""
-    # Deferred — see the module docstring.
-    from ml_learning.nanogpt_conor import train as entry
     from ml_harness.registry import build_model
-    # nanogpt's tables, not the reference ones: this test rebuilds the model the
-    # entry point trained, so it has to resolve the same `arch` tag that ran.
-    from ml_learning.nanogpt_conor.arches import ARCHES as GPT_ARCHES
-    from ml_learning.nanogpt_conor.datas import DATAS as GPT_DATAS
 
-    rd = entry.run(
-        gpt_config_path,
+    rd = run(
+        config_path,
         overrides=["runtime.compile=true"],
         runs_root=runs_root,
         cache_dir=None,
     )
     ckpt = torch.load(rd.ckpt_path("last"), weights_only=False)
-    cfg = load_run_config(gpt_config_path, GPT_ARCHES, GPT_DATAS)
-    model = build_model(cfg, ckpt["vocab_size"], GPT_ARCHES)
+    # The same tables the entry point ran with, so the `arch` tag resolves to
+    # the class that was trained.
+    cfg = load_run_config(config_path, ARCHES, DATAS)
+    model = build_model(cfg, ckpt["vocab_size"], ARCHES)
 
     # strict=True by default, so a stray prefix or a missing key raises here.
     # Not raising *is* the assertion.
     model.load_state_dict(ckpt["model"])
 
 
-def test_run_records_that_it_compiled(gpt_config_path, runs_root, fake_compile):
-    # Deferred — see the module docstring.
-    from ml_learning.nanogpt_conor import train as entry
-    rd = entry.run(
-        gpt_config_path,
+def test_run_records_that_it_compiled(config_path, runs_root, fake_compile):
+    rd = run(
+        config_path,
         overrides=["runtime.compile=true"],
         runs_root=runs_root,
         cache_dir=None,
@@ -193,8 +185,6 @@ def test_run_records_that_it_compiled(gpt_config_path, runs_root, fake_compile):
     assert json.loads(rd.config_path.read_text())["runtime"]["compile"] is True
 
 
-def test_the_default_run_does_not_compile(gpt_config_path, runs_root, fake_compile):
-    # Deferred — see the module docstring.
-    from ml_learning.nanogpt_conor import train as entry
-    entry.run(gpt_config_path, runs_root=runs_root, cache_dir=None)
+def test_the_default_run_does_not_compile(config_path, runs_root, fake_compile):
+    run(config_path, runs_root=runs_root, cache_dir=None)
     assert fake_compile == [False]

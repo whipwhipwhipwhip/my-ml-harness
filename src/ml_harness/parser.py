@@ -9,9 +9,9 @@ defaults still resolve to *a* path, just not one that exists.
 
 So the defaults arrive as arguments. Every entry point already computes its own
 repo root — it needs one for provenance anyway — and passing them down is the
-same rule the rest of `harness/` follows: `collect_provenance(repo_root=...)`,
+same rule the rest of `ml_harness/` follows: `collect_provenance(repo_root=...)`,
 `run_sweep(repo_root=...)`, `record_run(repo_root=...)`. The house rule is now
-uniform: **`harness/` resolves no path it wasn't given.**
+uniform: **`ml_harness/` resolves no path it wasn't given.**
 
 A default of `None` means "the project didn't supply one", which makes the flag
 `required` rather than silently pointing somewhere wrong. The one exception is

@@ -3,14 +3,11 @@ name = "ml_harness"
 version = "0.0.1"
 requires-python = ">=3.12"
 dependencies = [
-    # cache.py stores encoded corpora as int32 arrays
     "numpy>=2.2.6",
-    # store.py / metrics.py / analysis.py read runs back as frames
     "pandas>=2.3.3",
     "torch",
-    # strict=True parsing of the config blocks each discriminator names
     "dacite",
-    # the local package, not HuggingFace's — see [tool.uv.sources]
+    # the local package, not HuggingFace's
     "tokenizers",
 ]
 

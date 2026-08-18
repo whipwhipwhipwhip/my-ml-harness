@@ -1,4 +1,4 @@
-"""harness/loop.py, driven with fakes.
+"""ml_harness/loop.py, driven with fakes.
 
 No filesystem, no run directory, no GPT. The loop's contract is narrow enough that
 a nine-line model and a list-appending logger are complete implementations of it —

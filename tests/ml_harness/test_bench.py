@@ -1,4 +1,4 @@
-"""harness/bench.py, driven with the same fakes as the loop.
+"""ml_harness/bench.py, driven with the same fakes as the loop.
 
 No filesystem, no GPT, no timing assertions. Wall-clock numbers aren't testable —
 a loaded CI box makes any threshold either flaky or vacuous — so what's asserted

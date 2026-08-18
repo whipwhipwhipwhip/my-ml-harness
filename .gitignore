@@ -1,0 +1,33 @@
+# Jupyter
+.ipynb_checkpoints
+
+# Python
+__pycache__/
+
+# Tools
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Virtual environments
+.venv
+
+# IDE
+.vscode/
+
+# Misc
+.DS_Store
+
+# priv notebooks
+notebooks/
+
+# Claude
+skills/
+
+# experiments
+docs/
+runs/
+
+*.txt
+# token cache
+.cache/

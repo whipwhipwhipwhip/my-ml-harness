@@ -74,6 +74,28 @@ def test_eval_seed_splits_the_group():
     assert group_sha256(other) != group_sha256(cfg())
 
 
+def test_micro_batch_size_does_not_split_a_group():
+    """A hardware knob: the update is computed from `train.batch_size` either
+    way, and slicing it to fit a smaller card is the same experiment."""
+    other = cfg(train={"max_iters": 4, "micro_batch_size": 2})
+    assert group_sha256(other) == group_sha256(cfg(train={"max_iters": 4}))
+
+
+def test_micro_batch_size_still_changes_the_config_hash():
+    """The other half of the pair. The two runs saw different batches in a
+    different accumulation order, so they are not the same run — exactly the
+    standing two seeds of one config have."""
+    other = cfg(train={"max_iters": 4, "micro_batch_size": 2})
+    assert config_sha256(other) != config_sha256(cfg(train={"max_iters": 4}))
+
+
+def test_batch_size_still_splits_the_group():
+    """The knob that *is* experimental. If this ever grouped with a different
+    batch size, the exclusion above would have been drawn in the wrong place."""
+    other = cfg(train={"max_iters": 4, "batch_size": 64})
+    assert group_sha256(other) != group_sha256(cfg(train={"max_iters": 4, "batch_size": 32}))
+
+
 def test_hashing_does_not_mutate_the_config():
     """`group_sha256` drops fields to compute its digest; it must drop them from
     a copy. The dict it's handed is the one about to be written to disk."""

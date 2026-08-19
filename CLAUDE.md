@@ -174,6 +174,12 @@ Each of these produces a run that trains fine and means something different:
   scales `optim.lr`, which is the *peak*.
 - **Eval batches are drawn once, from a separate `eval_seed` generator** — otherwise every
   config change moves the yardstick as well as the thing being measured.
+- **`zero_grad` goes above the micro-batch loop, clipping and `step` below it** —
+  `train.micro_batch_size` splits a batch into `batch_size // micro_batch_size`
+  forward/backward passes, each loss divided by that count so the accumulated
+  gradient is the full batch's. Zeroing between forward and backward would discard
+  every micro-batch but the last; clipping per micro-batch is a different, much
+  stronger rule. It's in `GROUP_EXCLUDES` — a hardware knob, same experiment.
 - **Autocast wraps the forward pass and the loss only** — `backward()` and `step()` go
   outside it, so the master weights stay fp32.
 - **`--set` overrides apply to the raw dict before dacite**, never to a built `RunConfig`

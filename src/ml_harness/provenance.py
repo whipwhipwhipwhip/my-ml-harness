@@ -60,8 +60,15 @@ def _dist_version(name: str) -> str | None:
         return None
 
 # What a *group* of runs is allowed to differ by and still be the same
-# experiment: the seed, and the human label on it. Everything else stays in the
-# hash.
+# experiment: the seed, the human label on it, and how the batch was sliced to
+# fit in memory. Everything else stays in the hash.
+#
+# `train.micro_batch_size` is here because it is a hardware knob: the batch the
+# update is computed from is `train.batch_size` either way, and splitting it
+# across four forward passes is the same experiment run on a smaller card. Not
+# the same *run* — different batches are drawn and floats accumulate in a
+# different order — but that is exactly the standing `runtime.seed` has, and
+# `config_sha256` still separates them.
 #
 # `runtime.eval_seed` deliberately isn't here. Two runs with different eval
 # seeds are measured against different validation batches, so their losses
@@ -71,6 +78,7 @@ def _dist_version(name: str) -> str | None:
 GROUP_EXCLUDES: tuple[tuple[str, ...], ...] = (
     ("runtime", "seed"),
     ("note",),
+    ("train", "micro_batch_size"),
 )
 
 

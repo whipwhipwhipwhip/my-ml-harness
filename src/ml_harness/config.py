@@ -135,6 +135,25 @@ class TrainConfig:
     # the typical one; unclipped, Adam's moment estimates carry that spike for
     # thousands of steps. 1.0 is the nanoGPT/GPT-3 value.
     grad_clip: float | None = None
+    # Sequences per forward/backward pass, when that has to be smaller than the
+    # batch the update is computed from. `batch_size` keeps exactly one meaning
+    # — sequences per optimiser step — and this says how many of them fit in
+    # memory at once; the loop runs `batch_size // micro_batch_size` backward
+    # passes before each step, scaling each loss so the accumulated gradient
+    # equals the full batch's.
+    #
+    # None = no accumulation, which is what every run before this field did.
+    # Spelled this way round rather than as an accumulation count (nanoGPT's
+    # `grad_accum_steps`, where `batch_size` becomes the micro batch) because
+    # that would silently redefine `batch_size` across already-recorded runs,
+    # and leave the batch a run actually trained on as a product of two fields.
+    #
+    # A hardware knob, not an experimental one, which is why it is in
+    # provenance.GROUP_EXCLUDES: splitting a batch to fit a smaller card is the
+    # same experiment. Not the same *run* — the RNG draws a different sequence
+    # of batches and floats accumulate in a different order — which is exactly
+    # the standing `runtime.seed` is held to.
+    micro_batch_size: int | None = None
 
     def __post_init__(self):
         # 0.0 would zero every gradient and train nothing, silently — the run
@@ -142,6 +161,28 @@ class TrainConfig:
         # config that said it.
         if self.grad_clip is not None and self.grad_clip <= 0:
             raise ValueError(f"grad_clip must be positive, got {self.grad_clip}")
+        # Checked here rather than in the loop so a bad value fails before a
+        # model is built, rather than at step 0 of a run that has already
+        # written a run directory. An indivisible split is a config error and
+        # not a rounding question: silently training on batch_size rounded down
+        # to a multiple would make the recorded batch_size a lie.
+        if self.micro_batch_size is not None:
+            if self.micro_batch_size <= 0:
+                raise ValueError(
+                    f"micro_batch_size must be positive, got {self.micro_batch_size}"
+                )
+            if self.micro_batch_size > self.batch_size:
+                raise ValueError(
+                    f"micro_batch_size ({self.micro_batch_size}) must not exceed "
+                    f"batch_size ({self.batch_size}); it is a slice of the batch, "
+                    f"not a replacement for it"
+                )
+            if self.batch_size % self.micro_batch_size:
+                raise ValueError(
+                    f"batch_size ({self.batch_size}) must be divisible by "
+                    f"micro_batch_size ({self.micro_batch_size}); otherwise the "
+                    f"accumulated gradient is not the full batch's"
+                )
 
 @dataclass(frozen=True)
 class DataConfig:

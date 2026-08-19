@@ -92,6 +92,12 @@ def train(
     eval_interval = train_cfg.eval_interval
     grad_clip = train_cfg.grad_clip
 
+    # Resolved once, outside the loop: config.TrainConfig has already checked
+    # that the division is exact, so there is nothing to guard per step. None
+    # collapses to accum_steps == 1, i.e. exactly the single-batch path.
+    micro_batch_size = train_cfg.micro_batch_size or train_cfg.batch_size
+    accum_steps = train_cfg.batch_size // micro_batch_size
+
     # -1 rather than 0: if max_iters is 0 the loop body never runs, and "final step
     # 0" would be a lie. The caller checkpoints against this.
     final_step = -1
@@ -106,29 +112,51 @@ def train(
             for group in optimiser.param_groups:
                 group["lr"] = lr
 
-        xb, yb = data.get_batch(
-            "train", train_cfg.batch_size, model_cfg.block_size, str(device)
-        )[0]
-        # Forward and loss inside; backward and step outside. Autograd recorded
-        # the dtype each op ran in, so the backward pass matches without being
-        # told, and the parameters were never cast, so the update stays fp32.
-        with amp:
-            _, loss = model(xb, yb)
+        # Once, before the micro-batches rather than between forward and
+        # backward: gradients have to survive from one micro-batch to the next,
+        # and that accumulation *is* the mechanism.
         optimiser.zero_grad(set_to_none=True)
-        loss.backward()
+        # Accumulated on the device and read back once, after the loop. A
+        # per-micro-batch `.item()` would force a sync on every one of them,
+        # which is a real cost at accum_steps of any size.
+        batch_loss = torch.zeros((), device=device)
+
+        for _ in range(accum_steps):
+            # Drawn one micro-batch at a time rather than in a single
+            # `n_iters=accum_steps` call: fetching them all up front puts every
+            # micro-batch on the device at once, which is half of what
+            # accumulation exists to avoid.
+            xb, yb = data.get_batch(
+                "train", micro_batch_size, model_cfg.block_size, str(device)
+            )[0]
+            # Forward and loss inside; backward and step outside. Autograd recorded
+            # the dtype each op ran in, so the backward pass matches without being
+            # told, and the parameters were never cast, so the update stays fp32.
+            with amp:
+                _, loss = model(xb, yb)
+            # The model returns a *mean* loss, so summing accum_steps of them
+            # unscaled would give a gradient accum_steps times too large.
+            # Divided, the accumulated gradient is the full batch's.
+            (loss / accum_steps).backward()
+            batch_loss += loss.detach() / accum_steps
+
         # Between backward and step, which is the only place it means anything:
         # the gradients have to exist to be measured, and the optimiser has to
         # see the clipped ones. Rescales the whole parameter set by one factor
         # when its global L2 norm exceeds grad_clip, so the direction is
-        # preserved and only the length is capped.
+        # preserved and only the length is capped. After the accumulation, so
+        # it clips the whole batch's gradient — clipping each micro-batch's
+        # share would be a different and much stronger rule.
         if grad_clip is not None:
             torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
         optimiser.step()
 
         final_step = step
 
-        # the cheap one: this batch's loss, already computed
-        logger.log(step, "train", "batch_loss", loss.item())
+        # the cheap one: this batch's loss, already computed. Still the mean
+        # over `batch_size` sequences whether it took one forward pass or many,
+        # so the metric means the same thing on either side of this field.
+        logger.log(step, "train", "batch_loss", batch_loss.item())
         # Read back off the optimiser rather than from `lr` above, so it's logged
         # unconditionally and reports what the optimiser actually used — an
         # unscheduled run gets a flat line rather than a missing metric, and a

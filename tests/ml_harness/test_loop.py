@@ -258,6 +258,155 @@ def test_zero_clip_is_rejected_at_load(harness):
         harness("train.grad_clip=0")
 
 
+# ---- gradient accumulation ------------------------------------------------
+
+class ChunkedData:
+    """A `data` that hands out one fixed batch, sliced to whatever size is asked.
+
+    This is what takes the RNG out of the comparison. With the real `get_batch`,
+    one step at batch_size 4 and two micro-steps at 2 draw different rows, so
+    their gradients would differ for a reason that has nothing to do with
+    accumulation. Here both paths see exactly the same 4 sequences, and any
+    difference in the resulting gradient is the mechanism's fault.
+
+    Records what it was asked for, which is how the tests below see the shape of
+    the loop's requests without instrumenting the loop.
+    """
+
+    def __init__(self, x, y):
+        self.x, self.y = x, y
+        self.cursor = 0
+        self.requests: list[int] = []
+
+    def get_batch(self, split, batch_size, block_size, device, n_iters=1, generator=None):
+        self.requests.append(batch_size)
+        batches = []
+        for _ in range(n_iters):
+            lo = self.cursor
+            hi = lo + batch_size
+            batches.append((self.x[lo:hi], self.y[lo:hi]))
+            self.cursor = hi % len(self.x)
+        return batches
+
+
+def one_step(harness, *overrides):
+    """One training step over a fixed batch. Returns (gradients, data, logger).
+
+    The gradient is read off in a hook on `optimiser.step`, for the same reason
+    `grad_norm_at_step` does it: that is the only moment the accumulated
+    gradient exists, and by the time `train()` returns it has been replaced.
+
+    Seeded so the two sides of an equivalence test start from identical weights.
+    """
+    torch.manual_seed(0)
+    model, optimiser, real_data, cfg, eval_batches = harness(
+        "train.max_iters=1", *overrides
+    )
+    xb, yb = real_data.get_batch(
+        "train", cfg.train.batch_size, cfg.model.block_size, "cpu",
+        1, torch.Generator().manual_seed(7),
+    )[0]
+    data = ChunkedData(xb, yb)
+    logger = FakeLogger()
+
+    grads = []
+    real_step = optimiser.step
+
+    def spy(*args, **kwargs):
+        grads.append(
+            torch.cat([p.grad.reshape(-1) for p in model.parameters()]).clone()
+        )
+        return real_step(*args, **kwargs)
+
+    optimiser.step = spy
+    train(model, optimiser, data, cfg, DEVICE, eval_batches, logger, SpyEval())
+    return grads, data, logger
+
+
+def test_accumulated_gradient_equals_the_full_batch(harness):
+    """The claim the whole feature rests on: dividing each micro-loss by the
+    number of micro-batches makes the accumulated gradient the full batch's.
+
+    Off by a factor of `accum_steps` if the scaling is dropped, so a tight
+    tolerance here is the point — this would not fail by a little."""
+    whole, _, _ = one_step(harness)
+    split, _, _ = one_step(harness, "train.micro_batch_size=2")
+    assert torch.allclose(whole[0], split[0], atol=1e-6)
+
+
+def test_a_single_micro_batch_is_the_unaccumulated_path(harness):
+    """micro == batch is accum_steps of 1, i.e. exactly what ran before."""
+    whole, _, _ = one_step(harness)
+    same, _, _ = one_step(harness, "train.micro_batch_size=4")
+    assert torch.equal(whole[0], same[0])
+
+
+def test_one_optimiser_step_per_training_step_whatever_the_accumulation(harness):
+    """Accumulation splits the forward/backward, not the update. Stepping per
+    micro-batch would quietly train at 4x the intended batch count."""
+    grads, data, _ = one_step(harness, "train.micro_batch_size=1")
+    assert len(grads) == 1
+    assert data.requests == [1, 1, 1, 1]
+
+
+def test_no_micro_batch_size_asks_for_the_whole_batch_once(harness):
+    """Every run recorded before this field has to keep its numerics, and the
+    default has to cost nothing — one request, at the full batch size."""
+    _, data, _ = one_step(harness)
+    assert data.requests == [4]
+
+
+def test_batch_loss_still_means_the_mean_over_the_full_batch(harness):
+    """The metric has to be comparable across the field, or every run before it
+    falls out of the same plot."""
+    _, _, whole = one_step(harness)
+    _, _, split = one_step(harness, "train.micro_batch_size=2")
+    loss_of = lambda log: [
+        v for _, sp, m, v in log.records if sp == "train" and m == "batch_loss"
+    ]
+    assert loss_of(split) == pytest.approx(loss_of(whole), abs=1e-6)
+
+
+def test_clipping_sees_the_whole_batch_gradient(harness):
+    """Clipping stays after the accumulation. Clipping each micro-batch's share
+    would be a different and much stronger rule wearing the same config key."""
+    grads, _, _ = one_step(harness, "train.micro_batch_size=2", "train.grad_clip=0.01")
+    assert grads[0].norm().item() == pytest.approx(0.01, rel=1e-4)
+
+
+def test_accumulation_runs_every_step_not_just_the_first(harness):
+    """`zero_grad` moved to the top of the step; if it had stayed between
+    forward and backward, step 2 onwards would accumulate into step 1's."""
+    torch.manual_seed(0)
+    model, optimiser, real_data, cfg, eval_batches = harness(
+        "train.max_iters=3", "train.micro_batch_size=2"
+    )
+    xb, yb = real_data.get_batch(
+        "train", cfg.train.batch_size, cfg.model.block_size, "cpu",
+        1, torch.Generator().manual_seed(7),
+    )[0]
+    data = ChunkedData(xb, yb)
+    train(model, optimiser, data, cfg, DEVICE, eval_batches, FakeLogger(), SpyEval())
+    assert data.requests == [2] * 6
+
+
+@pytest.mark.parametrize(
+    "override, message",
+    [
+        ("train.micro_batch_size=3", "divisible"),
+        ("train.micro_batch_size=8", "must not exceed"),
+        ("train.micro_batch_size=0", "must be positive"),
+    ],
+)
+def test_a_micro_batch_that_cannot_divide_the_batch_is_rejected_at_load(
+    harness, override, message
+):
+    """Fail next to the config that said it, not at step 0 of a run that has
+    already opened a run directory."""
+    with pytest.raises(ValueError, match=message):
+        harness(override)
+
+
 # ---- edges ----------------------------------------------------------------
 
 def test_zero_iters_reports_minus_one_not_zero(harness):

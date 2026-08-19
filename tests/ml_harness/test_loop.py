@@ -177,8 +177,11 @@ def test_no_schedule_leaves_the_optimiser_alone(harness):
 
 
 def test_every_param_group_is_scheduled(harness):
-    """One group today; scheduling only the first would be a silent trap for
-    whoever splits weight decay out."""
+    """Scheduling only the first group would be a silent trap, and the weight
+    decay split makes it a live one: a real optimiser now has two groups, and
+    the second would sit at its build-time lr forever. Kept as a hand-added
+    group so the claim stays about the loop rather than about `build_optimiser`
+    — test_weight_decay.py makes it against the real split."""
     model, optimiser, data, cfg, eval_batches = harness("train.max_iters=1")
     optimiser.add_param_group({"params": [torch.zeros(1, requires_grad=True)]})
     train(

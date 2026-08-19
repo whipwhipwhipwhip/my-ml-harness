@@ -192,7 +192,10 @@ Each of these produces a run that trains fine and means something different:
   and an entry in the project's `ARCHES`. No edit to the loop or the entry point.
 - **An optimiser**: an `OptimSpec` in `OPTIMS` (`_adapt` wraps a torch optimiser class whose
   hyperparameters map 1:1; `_build_adamw` is the exception, since torch takes one `betas`
-  tuple and the config keeps two addressable scalars).
+  tuple and the config keeps two addressable scalars). `build_optimiser` hands it the two
+  param groups from `decay_param_groups` — GPT-2's rule, `optim.weight_decay` on tensors of
+  dim >= 2 and `0.0` on biases and LayerNorm gains — so an optimiser with no `weight_decay`
+  would be handed a key it doesn't know; none exists today.
 - **A tokenizer**: a `TokenizerConfig` subclass, a `(cfg, text) -> Tokenizer` builder, an
   entry in `TOKENIZERS`. The corpus is passed even to builders that ignore it, so callers
   never have to know which kind they built.

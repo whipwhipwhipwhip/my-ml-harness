@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Callable, Iterable, NamedTuple
+from typing import Any, Callable, Iterable, NamedTuple
 from dataclasses import asdict
 
 import torch.nn as nn
@@ -97,8 +97,19 @@ def _build_adamw(cfg: AdamWConfig, params: Iterable[nn.Parameter]) -> opt.Optimi
 
     The config keeps them apart so each is addressable on its own — `--set
     optim.beta2=0.95` is a sweep axis, and one element of a list isn't.
+
+    `weight_decay` here is the constructor default, which every group built by
+    `decay_param_groups` overrides with its own value. It is passed anyway so
+    that a caller handing this a bare parameter iterable — a test, a downstream
+    project building an optimiser by hand — gets the config's decay rather than
+    torch's silent 0.01.
     """
-    return opt.AdamW(params, lr=cfg.lr, betas=(cfg.beta1, cfg.beta2))
+    return opt.AdamW(
+        params,
+        lr=cfg.lr,
+        betas=(cfg.beta1, cfg.beta2),
+        weight_decay=cfg.weight_decay,
+    )
 
 OPTIMS: dict[str, OptimSpec] = {
     "adamw": OptimSpec(AdamWConfig, _build_adamw),
@@ -327,9 +338,52 @@ def build_model(cfg: RunConfig, vocab_size: int, ARCHES: dict[str, ArchSpec]) ->
 # Optimiser
 
 
+def decay_param_groups(
+    model: nn.Module, weight_decay: float
+) -> list[dict[str, Any]]:
+    """GPT-2's rule: decay tensors of dim >= 2, leave everything else alone.
+
+    Weight matrices and embeddings are decayed; biases and LayerNorm gains are
+    not. The dimension is a proxy for the distinction that matters — a matrix
+    maps between spaces and shrinking it is regularisation, while a bias or a
+    gain is a per-unit offset that decay just drags toward an arbitrary zero.
+
+    A free function rather than something inside `_build_adamw` because the
+    split is a property of the *model's parameter shapes*, not of the optimiser
+    that consumes it: a second decaying optimiser would want exactly this list.
+
+    `model.parameters()` de-duplicates shared tensors, so a weight-tied
+    embedding and output head is one entry here rather than two — decayed twice
+    per step is not a thing this can produce.
+
+    Returns param groups rather than a flat iterable, which is the interface
+    every torch optimiser already accepts in place of one. Note the loop writes
+    the scheduled lr into *every* group, which is what makes two of them safe.
+    """
+    params = [p for p in model.parameters() if p.requires_grad]
+    return [
+        {"params": [p for p in params if p.dim() >= 2], "weight_decay": weight_decay},
+        {"params": [p for p in params if p.dim() < 2], "weight_decay": 0.0},
+    ]
+
+
 def build_optimiser(cfg: RunConfig, model: nn.Module) -> opt.Optimizer:
-    """Build the module `cfg.optim_arch` names."""
-    return OPTIMS[cfg.optim_arch].build(cfg.optim, model.parameters())
+    """Build the module `cfg.optim_arch` names, over GPT-2's two param groups.
+
+    The grouping happens here rather than in the spec's `build` because this is
+    where the model is: `OptimSpec.build` takes parameters, and widening it to
+    take a module for the sake of one optimiser would put a model in the
+    signature of every optimiser that never needs one.
+
+    An optimiser without a `weight_decay` is the case to watch — it would be
+    handed groups carrying a key it doesn't know. Nothing in OPTIMS is such an
+    optimiser today, and torch's are near-uniformly decay-capable; the day one
+    arrives, this is the line that decides whether the split belongs to
+    `build_optimiser` or to the spec.
+    """
+    return OPTIMS[cfg.optim_arch].build(
+        cfg.optim, decay_param_groups(model, cfg.optim.weight_decay)
+    )
 
 def build_lr_schedule(cfg: RunConfig) -> LRSchedule:
     """Build the `(step) -> lr` closure `cfg.schedule_arch` names.

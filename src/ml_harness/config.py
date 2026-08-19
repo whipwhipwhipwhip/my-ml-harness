@@ -17,6 +17,35 @@ class AdamWConfig(OptimiserConfig):
 
     beta1: float = 0.9
     beta2: float = 0.999
+    # GPT-2's rule, applied in registry.decay_param_groups: this is the decay
+    # for tensors of dim >= 2 — weight matrices and embeddings — and biases and
+    # LayerNorm gains get 0.0. The dimension is a proxy for the distinction that
+    # matters: a matrix maps between spaces and shrinking it is regularisation,
+    # while a bias or a gain is a per-unit offset that decay just drags toward
+    # an arbitrary zero.
+    #
+    # 0.1 is the GPT-2/nanoGPT value. It is *not* what runs recorded before this
+    # field trained under: `_build_adamw` didn't pass `weight_decay` at all, so
+    # torch's AdamW default of 0.01 applied to every parameter, biases included.
+    # Those configs still load, but they no longer reproduce their original run
+    # — and no default could preserve that, since the grouping changes the
+    # numerics on its own.
+    #
+    # On AdamWConfig rather than the OptimiserConfig base for the same reason
+    # train.grad_clip isn't on it: the base carries what every optimiser has.
+    # There is a mechanical reason too — `_adapt` builds a torch optimiser as
+    # `optim_cls(params, **asdict(cfg))`, so a base-level field would silently
+    # become a flat, ungrouped `weight_decay=` kwarg for every optimiser built
+    # that way, and one optimiser would group where the rest didn't.
+    weight_decay: float = 0.1
+
+    def __post_init__(self):
+        # Negative decay is anti-regularisation: it grows the weights every
+        # step, and the run diverges slowly enough to look like a bad lr.
+        if self.weight_decay < 0:
+            raise ValueError(
+                f"weight_decay must be >= 0, got {self.weight_decay}"
+            )
 
 @dataclass(frozen=True)
 class ScheduleConfig:

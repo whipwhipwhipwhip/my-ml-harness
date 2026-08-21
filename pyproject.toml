@@ -1,6 +1,6 @@
 [project]
 name = "ml_harness"
-version = "0.0.3"
+version = "0.0.4"
 requires-python = ">=3.12"
 dependencies = [
     "numpy>=2.2.6",
@@ -22,4 +22,4 @@ build-backend = "uv_build"
 pythonpath = ["."]
 
 [tool.uv.sources]
-tokenizers = {git = "ssh://git@github.com/whipwhipwhipwhip/my-tokenizers.git", tag="v0.0.1" }
+tokenizers = {git = "ssh://git@github.com/whipwhipwhipwhip/my-tokenizers.git", tag="v0.0.2" }

@@ -356,7 +356,7 @@ wheels = [
 
 [[package]]
 name = "ml-harness"
-version = "0.0.3"
+version = "0.0.4"
 source = { editable = "." }
 dependencies = [
     { name = "dacite" },
@@ -376,7 +376,7 @@ requires-dist = [
     { name = "dacite" },
     { name = "numpy", specifier = ">=2.2.6" },
     { name = "pandas", specifier = ">=2.3.3" },
-    { name = "tokenizers", git = "ssh://git@github.com/whipwhipwhipwhip/my-tokenizers.git?tag=v0.0.1" },
+    { name = "tokenizers", git = "ssh://git@github.com/whipwhipwhipwhip/my-tokenizers.git?tag=v0.0.2" },
     { name = "torch" },
 ]
 
@@ -916,8 +916,8 @@ wheels = [
 
 [[package]]
 name = "tokenizers"
-version = "0.0.1"
-source = { git = "ssh://git@github.com/whipwhipwhipwhip/my-tokenizers.git?tag=v0.0.1#546766a4a808f60730edd125050d97637629c4c5" }
+version = "0.0.2"
+source = { git = "ssh://git@github.com/whipwhipwhipwhip/my-tokenizers.git?tag=v0.0.2#d389a0bd1df2fa4547b7ea2faf93144f405423c5" }
 dependencies = [
     { name = "pytest" },
     { name = "regex" },

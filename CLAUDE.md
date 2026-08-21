@@ -76,10 +76,14 @@ directory plus `tokenizers`; don't reintroduce such an import.
 - [config.py](src/ml_harness/config.py) — nested frozen dataclasses composing into
   `RunConfig` (`arch`, `model`, `optim_arch`, `optim`, `tokenizer_arch`, `tokenizer`,
   `train`, `data_arch`, `data`, `runtime`, `schedule_arch`, `schedule`, `note`). Torch-free.
-  `ModelConfig`, `TokenizerConfig`, `DataConfig` and `ScheduleConfig` are empty bases that
-  concrete configs subclass — empty because no field is common to every member (a generated
-  corpus has no `path`; "hold lr fixed" and "cosine to a floor" share no parameter). New
-  fields must be defaulted so already-recorded runs still load under `strict=True`.
+  `ModelConfig`, `DataConfig` and `ScheduleConfig` are empty bases that concrete configs
+  subclass — empty because no field is common to every member (a generated corpus has no
+  `path`; "hold lr fixed" and "cosine to a floor" share no parameter). `TokenizerConfig` is
+  the exception, and carries exactly one field: `pad_vocab_to`, which every tokenizer takes,
+  because padding is a property of the id space rather than of how the ids were learned. It
+  is `field(kw_only=True)` so a base-class default doesn't force one onto the required
+  fields the subclasses add. New fields must be defaulted so already-recorded runs still
+  load under `strict=True`.
 - [registry.py](src/ml_harness/registry.py) — `arch`, `optim_arch`, `tokenizer_arch`,
   `schedule_arch` and `data_arch` are **discriminators**: read the tag, *then* parse the
   matching block into the class it names. That two-stage read is why a
@@ -198,7 +202,9 @@ Each of these produces a run that trains fine and means something different:
   would be handed a key it doesn't know; none exists today.
 - **A tokenizer**: a `TokenizerConfig` subclass, a `(cfg, text) -> Tokenizer` builder, an
   entry in `TOKENIZERS`. The corpus is passed even to builders that ignore it, so callers
-  never have to know which kind they built.
+  never have to know which kind they built. Pass `cfg.pad_vocab_to` through — every
+  tokenizer in the package takes it, and a builder that dropped it would silently size the
+  embedding table differently from what the config asked for.
 - **A schedule**: a `ScheduleConfig` subclass and a `(cfg, peak_lr, max_iters) -> (step) ->
   lr` builder in `SCHEDULES`. Everything resolves at build time so the loop holds a closure,
   not a config to interpret.

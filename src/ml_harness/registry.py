@@ -146,14 +146,17 @@ class TokenizerSpec(NamedTuple):
     config_cls: type[TokenizerConfig]
     build: Callable[[TokenizerConfig, str], Tokenizer]
 
+# `cfg.pad_vocab_to` goes to every one of these, since it's a field on the base
+# config: padding is a property of the id space, not of how the ids were learned.
+
 def _build_char(cfg: CharConfig, text: str) -> Tokenizer:
-    return CharTokenizer.from_text(text)
+    return CharTokenizer.from_text(text, cfg.pad_vocab_to)
 
 def _build_char_fixed(cfg: CharFixedConfig, text: str) -> Tokenizer:
-    return CharTokenizer.from_alphabet(cfg.alphabet)
+    return CharTokenizer.from_alphabet(cfg.alphabet, cfg.pad_vocab_to)
 
 def _build_byte(cfg: ByteConfig, text: str) -> Tokenizer:
-    return ByteTokenizer()
+    return ByteTokenizer(cfg.pad_vocab_to)
 
 def _build_regex_bpe(cfg: RegexBPEConfig, text: str) -> Tokenizer:
     # `or NO_SPLIT_PATTERN` rather than a branch: null in the config means "the
@@ -161,12 +164,17 @@ def _build_regex_bpe(cfg: RegexBPEConfig, text: str) -> Tokenizer:
     tok = RegexTokenizer(
         special_tokens=cfg.special_tokens,
         split_pattern=cfg.split_pattern or NO_SPLIT_PATTERN,
+        pad_vocab_to=cfg.pad_vocab_to,
     )
+    # `vocab_size` is the merge target, `pad_vocab_to` is what gets reported —
+    # train to the former, and the padding sits above it untouched by merges.
     tok.train(text, cfg.vocab_size)
     return tok
 
 def _build_tiktoken(cfg: TiktokenConfig, text: str) -> Tokenizer:
-    return TiktokenBPETokenizer(cfg.encoding, cfg.split_pattern, cfg.special_tokens)
+    return TiktokenBPETokenizer(
+        cfg.encoding, cfg.split_pattern, cfg.special_tokens, cfg.pad_vocab_to
+    )
 
 TOKENIZERS: dict[str, TokenizerSpec] = {
     "char": TokenizerSpec(CharConfig, _build_char),

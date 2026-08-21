@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 @dataclass(frozen=True)
 class OptimiserConfig:
@@ -294,7 +294,25 @@ class TokenizerConfig:
     the subclasses below the `tokenizer` block parses into. Two of them are
     empty, which is not a mistake — "the alphabet is whatever the corpus
     contains" and "one id per byte" are complete descriptions.
+
+    Not quite empty, though: padding is the one option every tokenizer takes, so
+    it sits here rather than being repeated five times below.
     """
+
+    # The absolute `vocab_size` to report, if larger than the real one. Buys
+    # nothing linguistic — the ids it adds are unreachable and their embedding
+    # rows train on nothing — and buys a number that factorises the way a GPU
+    # wants: 50257 is prime-ish and awkward, 50304 is 64 x 786. The tokenizer
+    # owns it rather than the model because `vocab_size` is the single number
+    # the embedding table is built from, so a model that padded privately would
+    # disagree with the tokenizer that named its ids. See
+    # `tokenizers.base.pad_vocab_size`, and note it lands in `to_dict` and
+    # therefore in the fingerprint, which is what keeps a padded run and an
+    # unpadded one out of the same cache entry.
+    #
+    # `kw_only` so a base-class default doesn't force one onto the required
+    # fields the subclasses add (`alphabet`, `vocab_size`, `encoding`).
+    pad_vocab_to: int | None = field(default=None, kw_only=True)
 
 @dataclass(frozen=True)
 class CharConfig(TokenizerConfig):

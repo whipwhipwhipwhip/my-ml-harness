@@ -131,6 +131,68 @@ def test_a_special_the_encoding_does_not_define_is_rejected(config_path):
         build_tokenizer(cfg, CORPUS)
 
 
+# ---- vocabulary padding ---------------------------------------------------
+#
+# On the base config, so it reaches every arch. That the padded ids behave (are
+# unreachable, decode to nothing) is `tests/tokenizers/`; what's asked here is
+# whether the number in the config file reaches the tokenizer, since it sizes
+# the embedding table and therefore the checkpoint.
+
+@pytest.mark.parametrize("arch", list(CASES))
+def test_padding_reaches_every_tokenizer(config_path, arch):
+    unpadded = build_tokenizer(load(config_path, arch), CORPUS).vocab_size
+    padded = build_tokenizer(
+        load(config_path, arch, [f"tokenizer.pad_vocab_to={unpadded + 7}"]), CORPUS
+    )
+
+    assert padded.vocab_size == unpadded + 7
+
+
+def test_padding_is_off_by_default(config_path):
+    """An existing config file means what it always meant."""
+    assert load(config_path, "char").tokenizer.pad_vocab_to is None
+
+
+def test_gpt2_with_endoftext_pads_to_50304(config_path):
+    """The case padding exists for: GPT-2's 50256 ranks, plus the one special
+    that takes it to 50257, reported as 64 x 786 so the matmuls either side of
+    the model get a shape they like."""
+    cfg = load(
+        config_path,
+        "tiktoken",
+        ['tokenizer.special_tokens=["<|endoftext|>"]', "tokenizer.pad_vocab_to=50304"],
+    )
+    tok = build_tokenizer(cfg, CORPUS)
+
+    assert tok.unpadded_vocab_size == 50257
+    assert tok.vocab_size == 50304
+
+
+def test_padding_survives_the_recipe(config_path):
+    """`to_dict` is what `runs/<id>/tokenizer.json` holds, so a padding it
+    dropped would be a checkpoint whose embedding table no longer fits."""
+    cfg = load(config_path, "tiktoken", ["tokenizer.pad_vocab_to=50304"])
+    tok = build_tokenizer(cfg, CORPUS)
+
+    assert tok.to_dict()["pad_vocab_to"] == 50304
+
+
+def test_padding_below_the_real_vocabulary_is_rejected(config_path):
+    """Not silently ignored: a config asking for fewer ids than exist is a
+    statement about the embedding table that isn't true.
+
+    Raised when `vocab_size` is read rather than when the tokenizer is built,
+    which is the tokenizers package's choice, not ours. Still early enough: an
+    entry point reads it to size the model, which is before `record_run` has put
+    a directory on disk."""
+    tok = build_tokenizer(
+        load(config_path, "tiktoken", ["tokenizer.pad_vocab_to=100"]), CORPUS
+    )
+
+    with pytest.raises(ValueError, match="can only grow"):
+        tok.vocab_size
+
+
 # ---- what a wrong config does ---------------------------------------------
 
 def test_unknown_tokenizer_arch_is_rejected(config_path):

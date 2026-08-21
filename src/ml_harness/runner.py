@@ -174,6 +174,7 @@ def record_run(
     device: torch.device | str,
     repo_root: Path | str,
     smoke: bool = False,
+    world_size: int = 1,
 ) -> Iterator[tuple[RunDir, RunRecord]]:
     """Open a run directory, then close it out whatever happens inside.
 
@@ -209,7 +210,13 @@ def record_run(
         runs_root,
         asdict(cfg),
         collect_provenance(
-            str(device), vocab_size, repo_root, data.sha256, data.tokenizer, asdict(cfg)
+            str(device),
+            vocab_size,
+            repo_root,
+            data.sha256,
+            data.tokenizer,
+            asdict(cfg),
+            world_size,
         ),
     )
     # Written here rather than inside `new_run` for the same reason the

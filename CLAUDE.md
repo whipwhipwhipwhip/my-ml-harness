@@ -97,7 +97,13 @@ directory plus `tokenizers`; don't reintroduce such an import.
   appears here something has leaked downward. It reaches the outside world through exactly
   two duck-typed collaborators: `logger.log(step, split, metric, value)` (the loop decides
   what counts as a metric) and `on_eval(step, losses)` (the caller decides whether to
-  checkpoint, sample or print).
+  checkpoint, sample or print). **Data parallelism reaches it the same duck-typed way, and
+  the word "rank" appears nowhere**: `reduce_loss` is an injected tensor function applied to
+  the batch loss before logging (unreduced, `metrics.jsonl` would record rank 0's batches
+  rather than the step's), and `_set_grad_sync` sets DDP's own
+  `require_backward_grad_sync` flag *if the model has one*, so only the last micro-batch of
+  a step all-reduces. `isinstance`-ing against DDP here would put a distributed concept in
+  the one module whose whole claim is that it has none.
 - [runner.py](src/ml_harness/runner.py) — the parts of an entry point that name no model:
   `build_run(cfg, vocab_size, ARCHES, device) -> BuiltRun(model, runnable, optimiser,
   lr_schedule)`, and `record_run(...)`, a context manager that opens the run directory and
@@ -142,6 +148,19 @@ directory plus `tokenizers`; don't reintroduce such an import.
   state, so callers must set it on *every* run — a sweep drives many points in one process),
   `autocast_context` (bf16 only; fp16 would need a GradScaler this harness doesn't have),
   `compile_model`.
+- [dist.py](src/ml_harness/dist.py) — data parallelism, under the same rule as `device.py`:
+  it is about *how* a run is carried out, never what is trained. **The environment is read in
+  exactly one place** (`DistContext.from_env`; `RANK` is the discriminator, since only a
+  launcher sets it) and everything else branches on a value. Every function is a no-op at
+  `world_size == 1`, which is the path every test, every smoke run and every laptop takes.
+  `distributed` is a context manager because a group that isn't left holds `torchrun` open.
+  `shard_batch` is the load-bearing decision: **`train.batch_size` is global**, so one config
+  is the same experiment on one GPU or eight — same tokens per step, same `group_sha256` —
+  and the world size is a machine fact recorded in provenance, not an axis. Its divisibility
+  checks live here because `TrainConfig.__post_init__` cannot see how many processes are
+  about to share it. `loss_reducer` is SUM-then-divide rather than `ReduceOp.AVG`, which NCCL
+  implements and gloo does not — i.e. AVG breaks in exactly the local CPU run you check this
+  with. What is *not* here is anything inside the step: see `loop.py`.
 - [analysis.py](src/ml_harness/analysis.py) — `varying` (the config columns that actually
   differ across a directory of runs — an ablation *is* a config diff), `run_table`,
   `group_key`, `seed_groups`, `curves`. Frames in, frames out, torch-free. It lives in a
@@ -186,6 +205,14 @@ Each of these produces a run that trains fine and means something different:
   stronger rule. It's in `GROUP_EXCLUDES` — a hardware knob, same experiment.
 - **Autocast wraps the forward pass and the loss only** — `backward()` and `step()` go
   outside it, so the master weights stay fp32.
+- **`dist.reseed_batches` goes *after* `build_run`, never before** — the ranks have to seed
+  identically so they build bit-identical weights; the offset is for what gets *drawn* from
+  there on. Before, and you have N different models that DDP silently replaces with rank
+  0's. Omitted entirely, and every rank draws the same batch and all-reduces a gradient with
+  itself: N times the power for one rank's training, and a loss curve that looks perfect.
+- **`require_backward_grad_sync` is set before the forward pass, not the backward** — DDP
+  reads it in `forward()` to decide whether to prepare its reducer, so setting it later is
+  read too late and does nothing at all.
 - **`--set` overrides apply to the raw dict before dacite**, never to a built `RunConfig`
   (frozen: it would raise `FrozenInstanceError`). Going through the dict is also what makes
   an override validated by exactly the path a hand-typed JSON value is.
@@ -218,7 +245,7 @@ question:
 
 - Pure config/cache/frame work, milliseconds: `test_overrides.py`,
   `test_tokenizer_config.py`, `test_token_cache.py`, `test_config_hash.py`,
-  `test_analysis.py`, `test_parser.py`, `test_schedule.py`.
+  `test_analysis.py`, `test_parser.py`, `test_schedule.py`, `test_dist.py`.
 - The loop against a nine-line `StubModel` (deliberately *not* `testing.TinyModel` — the
   claim is that the loop's contract is narrow enough for a stub to satisfy), and the sweep
   driver against a fake `run_fn` that writes only a `status.json`: `test_loop.py`,
@@ -227,6 +254,14 @@ question:
 - `testing.run()` into `tmp_path`, asserting on the *record* rather than on learning: the
   entry-point sections of `test_autocast.py`, `test_compile.py`, `test_matmul_precision.py`,
   and `test_sweep.py`'s one real sweep. Most of the suite's wall time.
+
+**Data parallelism is tested without ever starting a process group**, and that is a
+deliberate constraint rather than a shortcut: `dist.py`'s functions are pure (read an
+environment, divide a batch, re-seed) and the loop's two hooks are duck-typed, so a fake
+with a `require_backward_grad_sync` attribute and a plain tensor function are complete
+implementations. If testing this ever starts needing `torchrun`, the seams have moved to the
+wrong places. What the suite genuinely cannot answer is whether NCCL and gloo move the bytes
+— that needs a real multi-rank run, and it belongs to the project that launches one.
 
 **The portability rule, and it is mechanical: every test drives `ml_harness` and nothing
 else.** `config_path` is the only config fixture and it builds the reference arch. That rule

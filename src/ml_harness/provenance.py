@@ -132,6 +132,7 @@ def collect_provenance(
     sha256,
     tokenizer: Tokenizer,
     config: dict | None = None,
+    world_size: int = 1,
 ) -> dict:
     """Facts about the world — observed, not chosen.
 
@@ -174,6 +175,15 @@ def collect_provenance(
         "tokenizer_kind": tokenizer.kind,
         "tokenizer_sha256": fingerprint(tokenizer),
         "hostname": os.uname().nodename,
+        # How many processes shared this run's batch. Provenance rather than
+        # config, and the distinction is the whole reason data parallelism
+        # doesn't fragment `runs/`: `train.batch_size` is global, so eight ranks
+        # and one rank running the same config are the *same experiment* and
+        # share a `group_sha256`. What differs is the machine, and the machine
+        # is what this file is for. Defaulted, so every already-recorded run and
+        # every caller that predates this field still reads as what it was: one
+        # process.
+        "world_size": world_size,
     }
 
     if config is not None:

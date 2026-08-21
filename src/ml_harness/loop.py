@@ -23,6 +23,34 @@ import torch
 from ml_harness.config import RunConfig
 
 
+def _identity(tensor):
+    """Default `reduce_loss`. A named function rather than a lambda so a
+    traceback through it says what it is."""
+    return tensor
+
+
+def _set_grad_sync(model, enabled: bool) -> None:
+    """Tell a DDP-wrapped model whether this backward should all-reduce.
+
+    Duck-typed on purpose, and it is the same duck-typing the logger and
+    `on_eval` get: `require_backward_grad_sync` is DDP's own flag, absent on a
+    plain `nn.Module`, so a single-process run takes the `hasattr` branch and
+    nothing else changes. Importing DDP to `isinstance` against would put a
+    distributed concept in a module whose entire claim is that it has none.
+
+    **Set before the forward pass, not before the backward.** DDP reads this in
+    `forward()` to decide whether to call `prepare_for_backward`; setting it
+    afterwards is read too late and silently does nothing.
+
+    Why it matters: without it, DDP all-reduces on *every* micro-batch, so a run
+    at `accum_steps=8` pays eight full gradient exchanges per optimiser step
+    instead of one. Purely throughput — the arithmetic is identical either way,
+    which is what makes it so easy to leave broken.
+    """
+    if hasattr(model, "require_backward_grad_sync"):
+        model.require_backward_grad_sync = enabled
+
+
 @torch.no_grad()
 def evaluate(model, batches, amp=None) -> float:
     """Mean loss over a fixed set of batches, with dropout off.
@@ -67,6 +95,7 @@ def train(
     on_eval,
     amp=None,
     lr_schedule=None,
+    reduce_loss=None,
 ) -> dict:
     """Run the training loop. Raises on failure; the caller decides what that means.
 
@@ -82,8 +111,17 @@ def train(
              to leave the optimiser's lr exactly as it was built. Built by the
              caller for the same reason `amp` is; a closure rather than a config
              so this module never learns what a cosine is.
+    reduce_loss: callable(tensor) -> tensor, applied to the batch loss before it
+             is logged, or None for identity. Exists for data parallelism: under
+             DDP this model saw only its rank's share of `train.batch_size`, so
+             the loss it computed is that share's mean and logging it unreduced
+             would make `metrics.jsonl` a record of rank 0's batches rather than
+             the step's. Injected as a plain tensor function for the same reason
+             `amp` and `lr_schedule` are — the caller assembles the config's
+             consequences, and this module never learns that ranks exist.
     """
     amp = amp if amp is not None else contextlib.nullcontext()
+    reduce_loss = reduce_loss if reduce_loss is not None else _identity
 
     train_cfg = cfg.train
     model_cfg = cfg.model
@@ -121,7 +159,12 @@ def train(
         # which is a real cost at accum_steps of any size.
         batch_loss = torch.zeros((), device=device)
 
-        for _ in range(accum_steps):
+        for micro_step in range(accum_steps):
+            # Only the last micro-batch of the step syncs gradients across ranks;
+            # the ones before it accumulate locally. A no-op unless the model is
+            # DDP-wrapped — see `_set_grad_sync`, including why this has to
+            # precede the forward pass rather than the backward.
+            _set_grad_sync(model, micro_step == accum_steps - 1)
             # Drawn one micro-batch at a time rather than in a single
             # `n_iters=accum_steps` call: fetching them all up front puts every
             # micro-batch on the device at once, which is half of what
@@ -155,8 +198,12 @@ def train(
 
         # the cheap one: this batch's loss, already computed. Still the mean
         # over `batch_size` sequences whether it took one forward pass or many,
-        # so the metric means the same thing on either side of this field.
-        logger.log(step, "train", "batch_loss", batch_loss.item())
+        # so the metric means the same thing on either side of this field —
+        # and, with `reduce_loss` supplied, whether that batch was computed by
+        # one process or by eight. The reduction goes here rather than around
+        # the accumulator above so it costs one collective per step, not one
+        # per micro-batch.
+        logger.log(step, "train", "batch_loss", reduce_loss(batch_loss).item())
         # Read back off the optimiser rather than from `lr` above, so it's logged
         # unconditionally and reports what the optimiser actually used — an
         # unscheduled run gets a flat line rather than a missing metric, and a

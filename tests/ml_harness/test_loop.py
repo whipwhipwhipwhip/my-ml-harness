@@ -444,3 +444,128 @@ def test_evaluate_averages_over_the_batches_it_is_given(harness):
     batches = eval_batches["val"]
     per_batch = [evaluate(model, [b]) for b in batches]
     assert evaluate(model, batches) == pytest.approx(sum(per_batch) / len(per_batch))
+
+
+# ---- data parallelism ------------------------------------------------------
+#
+# The loop's whole share of it: suppress DDP's all-reduce on every micro-batch
+# but the last, and let the caller reduce the logged loss. Both are duck-typed,
+# so a fake with the right attribute and a plain tensor function are complete
+# implementations — which is the same claim `StubModel` makes about the model.
+
+class SyncSpyModel(StubModel):
+    """A model that looks enough like DDP to answer whether the loop drives it.
+
+    Records `require_backward_grad_sync` as each forward pass sees it, which is
+    the moment that matters: DDP reads the flag in `forward()` to decide whether
+    to prepare its reducer, so a loop that set it after the forward would be
+    setting it too late and this would catch that.
+
+    Guarded on `is_grad_enabled` for the same reason DDP's own check is —
+    `evaluate()` runs under `no_grad` and its forwards are not part of the
+    question.
+    """
+
+    def __init__(self, vocab_size: int):
+        super().__init__(vocab_size)
+        self.require_backward_grad_sync = True
+        self.sync_flags: list[bool] = []
+
+    def forward(self, idx, targets=None):
+        if torch.is_grad_enabled():
+            self.sync_flags.append(self.require_backward_grad_sync)
+        return super().forward(idx, targets)
+
+
+def run_with_model(harness, model_cls, *overrides, reduce_loss=None):
+    """`run_loop`, but with a say in the model and the reduction.
+
+    Seeded like `one_step`, and for the same reason: the tests below compare two
+    calls against each other, so both the initial weights and the batches drawn
+    off the global RNG have to match on each side. Without it every comparison
+    fails for a reason that has nothing to do with what is being tested.
+    """
+    torch.manual_seed(0)
+    _, optimiser, data, cfg, eval_batches = harness(*overrides)
+    model = model_cls(data.tokenizer.vocab_size)
+    optimiser = torch.optim.AdamW(model.parameters(), lr=cfg.optim.lr)
+    logger = FakeLogger()
+    train(
+        model, optimiser, data, cfg, DEVICE, eval_batches, logger, SpyEval(),
+        None, None, reduce_loss,
+    )
+    return model, logger
+
+
+def test_only_the_last_micro_batch_of_a_step_syncs_gradients(harness):
+    """The point of the whole mechanism. Without it DDP all-reduces on every
+    micro-batch, so accum_steps=8 pays eight gradient exchanges per optimiser
+    step instead of one — identical arithmetic, eight times the network."""
+    model, _ = run_with_model(
+        harness, SyncSpyModel, "train.max_iters=1", "train.micro_batch_size=2"
+    )
+    assert model.sync_flags == [False, True]
+
+
+def test_every_step_ends_with_a_sync(harness):
+    """Per step, not once per run. A flag left False after the first step would
+    leave every later step's gradient un-reduced and each rank drifting into its
+    own model, which no loss curve would show."""
+    model, _ = run_with_model(
+        harness, SyncSpyModel, "train.max_iters=3", "train.micro_batch_size=2"
+    )
+    assert model.sync_flags == [False, True, False, True, False, True]
+
+
+def test_without_accumulation_every_backward_syncs(harness):
+    """accum_steps == 1 means the only micro-batch is also the last one."""
+    model, _ = run_with_model(
+        harness, SyncSpyModel, "train.max_iters=2", "train.micro_batch_size=null"
+    )
+    assert model.sync_flags == [True, True]
+
+
+def test_a_model_without_the_flag_is_left_alone(harness):
+    """The single-process path. The loop must not grow the attribute on a plain
+    module — a stray `require_backward_grad_sync` on an undistributed model is
+    a lie that the next reader has to disprove."""
+    model, _ = run_with_model(
+        harness, StubModel, "train.max_iters=1", "train.micro_batch_size=2"
+    )
+    assert not hasattr(model, "require_backward_grad_sync")
+
+
+def test_reduce_loss_is_applied_to_the_logged_batch_loss(harness):
+    """Under DDP the model saw one rank's share, so the raw number is that
+    share's mean rather than the step's."""
+    plain, logger = run_with_model(harness, StubModel, "train.max_iters=1")
+    _, doubled = run_with_model(
+        harness, StubModel, "train.max_iters=1", reduce_loss=lambda t: t * 2
+    )
+
+    raw = [v for _, sp, m, v in logger.records if m == "batch_loss"]
+    red = [v for _, sp, m, v in doubled.records if m == "batch_loss"]
+    assert red == pytest.approx([v * 2 for v in raw])
+
+
+def test_no_reducer_logs_the_loss_unchanged(harness):
+    """The default, and what every caller written before this parameter gets."""
+    _, logger = run_with_model(harness, StubModel, "train.max_iters=1")
+    _, identity = run_with_model(
+        harness, StubModel, "train.max_iters=1", reduce_loss=lambda t: t
+    )
+
+    raw = [v for _, sp, m, v in logger.records if m == "batch_loss"]
+    same = [v for _, sp, m, v in identity.records if m == "batch_loss"]
+    assert raw == pytest.approx(same)
+
+
+def test_reducing_does_not_disturb_training(harness):
+    """The reduction is for the metric only. If it mutated the accumulator in
+    place, or worse the graph, the weights would diverge from the unreduced run
+    and the logged number would have changed what it was reporting on."""
+    plain, _ = run_with_model(harness, StubModel, "train.max_iters=2")
+    scaled, _ = run_with_model(
+        harness, StubModel, "train.max_iters=2", reduce_loss=lambda t: t * 100
+    )
+    assert torch.allclose(plain.emb.weight, scaled.emb.weight)

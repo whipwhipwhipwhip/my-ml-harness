@@ -1,20 +1,19 @@
-"""Atomic writes and non-raising reads — the harness's whole filesystem vocabulary.
+"""Atomic writes and reads that don't raise. All the file I/O the harness does.
 
-Copied from the origin repo's `utils/io.py` rather than imported from it, so that
-`ml_harness/` depends on nothing outside its own directory and the `tokenizers`
-package. That copy is what made this package extractable at all: ~30 lines here
-are cheaper than a shared package that exists only to be shared. Don't undo it by
-reaching for a utility library — one grep is the whole invariant.
+Copied from `utils/io.py` in the repo this was extracted from, rather than
+imported, so that `ml_harness/` depends on nothing outside its own directory
+(plus the `tokenizers` package). That's what made it possible to split this
+package out, and ~30 duplicated lines are cheaper than a shared utils package.
 
-Two ideas, both about what a killed process leaves behind:
+Both functions are about what a killed process leaves behind:
 
-- **Write through a temp file and `os.replace`.** A reader sees the old file or
-  the new one, never half of either. `runs/` is written *during* training, so
-  "killed mid-write" is the normal case rather than the exotic one.
-- **Read without raising.** Every caller here is reading a record back for
-  analysis, where one truncated `status.json` in a directory of 200 runs should
-  cost you that row, not the frame. So these return `(data, error)` and let the
-  caller decide, which is why they aren't just `json.load`.
+- **Write via a temp file and `os.replace`.** A reader sees either the old file
+  or the new one, never half of one. `runs/` is written *during* training, so
+  being killed mid-write is a normal case, not an unusual one.
+- **Read without raising.** These are used to read records back for analysis,
+  where one truncated `status.json` in a directory of 200 runs should lose you
+  that row, not the whole frame. So they return `(data, error)` and let the
+  caller decide.
 """
 
 import json
@@ -41,7 +40,7 @@ def _safe_load(path):
 
 
 def _safe_loads(text):
-    """`_safe_load` for text already in hand — the JSONL line case."""
+    """`_safe_load` for a string rather than a file (e.g. one JSONL line)."""
     error = False
     try:
         data = json.loads(text)

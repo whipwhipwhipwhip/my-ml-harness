@@ -15,11 +15,11 @@ from tokenizers import Tokenizer, fingerprint
 def git(REPO_ROOT, *args: str) -> str | None:
     """Run a git command in `REPO_ROOT`, or None if it fails for any reason.
 
-    Lives here rather than in a shared utils package so `ml_harness/` depends on
-    nothing outside its own directory. None on failure because every use is
-    provenance: a run from a tarball with no `.git`, or a machine with no git
-    installed, is still a run, and "we couldn't tell" is a truthful record
-    where a crashed training job is not.
+    Lives here rather than in a shared utils package so `ml_harness/` doesn't
+    depend on anything outside its own directory. Returns None on failure
+    because this is only used for provenance: a run from a tarball with no
+    `.git`, or on a machine without git, is still a valid run, and recording
+    "unknown" is better than crashing.
     """
     try:
         return subprocess.check_output(
@@ -30,20 +30,18 @@ def git(REPO_ROOT, *args: str) -> str | None:
 
 
 def find_git_dirty(REPO_ROOT):
-    """True/False if git answered, None if it couldn't — three states, not two.
+    """True/False if git answered, None if it couldn't.
 
-    The distinction matters downstream: `collect_provenance` only bothers
-    recording a patch when this is truthy, and None means "unknown" rather than
-    "clean", which is not something to quietly record as a reproducible run.
+    `collect_provenance` only records a patch when this is True, and None means
+    "unknown" rather than "clean", so a run without git isn't recorded as
+    reproducible.
     """
     is_dirty = git(REPO_ROOT, "status", "--porcelain")
     return bool(is_dirty) if is_dirty else None
 
-# The distribution that ships `ml_harness/`. This is now its own package, which
-# is exactly the case the field was added for: a downstream project pins the
-# harness as a dependency, so the harness's code is invisible to *that* repo's
-# `git_sha`, which is where reproducibility needs it most. Runs written either
-# side of the split stay comparable because both record this.
+# The distribution that ships `ml_harness/`. A project installs the harness as a
+# dependency, so the project's `git_sha` doesn't cover the harness's code; the
+# harness version recorded alongside it does.
 HARNESS_DISTRIBUTION = "ml_harness"
 
 
@@ -51,30 +49,29 @@ def _dist_version(name: str) -> str | None:
     """The installed version of a distribution, or None if it isn't one.
 
     None rather than raising, like every other field here: provenance records
-    what it can observe, and a harness imported from a source tree with no
-    install is still a run worth recording.
+    what it can see, and a harness run from a source tree with nothing
+    installed is still worth recording.
     """
     try:
         return version(name)
     except PackageNotFoundError:
         return None
 
-# What a *group* of runs is allowed to differ by and still be the same
-# experiment: the seed, the human label on it, and how the batch was sliced to
-# fit in memory. Everything else stays in the hash.
+# What runs in a *group* can differ by and still count as the same experiment:
+# the seed, the note, and how the batch was split to fit in memory. Everything
+# else is part of the hash.
 #
-# `train.micro_batch_size` is here because it is a hardware knob: the batch the
-# update is computed from is `train.batch_size` either way, and splitting it
-# across four forward passes is the same experiment run on a smaller card. Not
-# the same *run* — different batches are drawn and floats accumulate in a
-# different order — but that is exactly the standing `runtime.seed` has, and
-# `config_sha256` still separates them.
+# `train.micro_batch_size` is here because it's a hardware setting: the update
+# is computed from `train.batch_size` either way, and splitting it over four
+# forward passes is the same experiment on a smaller card. It's not quite the
+# same *run* (different batches get drawn, and floats are summed in a different
+# order), but that's also true of `runtime.seed`, and `config_sha256` still
+# tells them apart.
 #
-# `runtime.eval_seed` deliberately isn't here. Two runs with different eval
-# seeds are measured against different validation batches, so their losses
-# aren't averageable — which is the one thing a group exists to do. Same for
-# `runtime.device`: "works on CPU, differs on MPS" is a difference worth being
-# able to see rather than one to hash away.
+# `runtime.eval_seed` is left out on purpose. Different eval seeds mean
+# different validation batches, so the losses can't be averaged, and averaging
+# is the whole point of a group. Same for `runtime.device`: if a result differs
+# between CPU and MPS, you want to be able to see that.
 GROUP_EXCLUDES: tuple[tuple[str, ...], ...] = (
     ("runtime", "seed"),
     ("note",),
@@ -86,8 +83,8 @@ def _sha256_json(obj: Any) -> str:
     """sha256 of a canonical JSON rendering.
 
     `sort_keys` for the same reason `tokenizers.fingerprint` uses it: the hash
-    has to survive a round trip through a file and a dict whose insertion order
-    changed. `asdict` order is stable today, but nothing enforces that.
+    shouldn't depend on dict order, which can change on a round trip through a
+    file. `asdict` order is stable today, but nothing guarantees it.
     """
     return hashlib.sha256(
         json.dumps(obj, sort_keys=True).encode("utf-8")
@@ -116,11 +113,10 @@ def config_sha256(config: dict) -> str:
 
 
 def group_sha256(config: dict) -> str:
-    """Identity of an *experiment*: the config modulo the axes in GROUP_EXCLUDES.
+    """Identity of an *experiment*: the config minus the keys in GROUP_EXCLUDES.
 
-    This is what makes the house rule mechanical. N seeds of one config share a
-    `group_sha256`, so "mean +/- spread over seeds" is a groupby on one column
-    rather than a hand-assembled list of run ids.
+    N seeds of one config share a `group_sha256`, so "mean +/- spread over
+    seeds" is a groupby on one column rather than a hand-picked list of run ids.
     """
     return _sha256_json(_without(config, GROUP_EXCLUDES))
 
@@ -134,25 +130,23 @@ def collect_provenance(
     config: dict | None = None,
     world_size: int = 1,
 ) -> dict:
-    """Facts about the world — observed, not chosen.
+    """Facts about the environment the run happened in: observed, not chosen.
 
-    The data hash matters because `.gitignore` has `*.txt`, so
-    input.txt is not in git and this is the only record of what was trained on.
+    The data hash matters because `*.txt` is gitignored, so the corpus isn't
+    in git and this is the only record of what the model was trained on.
 
-    The tokenizer hash matters for the same reason one step further along: the
-    same corpus under two vocabularies is two different training sets, and
-    `vocab_size` alone won't tell them apart — two BPE runs at 50256 can be
-    completely different tokenizers. `tokenizer_kind` is the class; the config's
-    `tokenizer_arch` is the name the run asked for, and they aren't the same
-    string (`char_fixed` builds a `char`).
+    The tokenizer hash matters for the same reason: the same corpus with two
+    different vocabularies is two different training sets, and `vocab_size`
+    alone can't tell them apart (two BPE tokenizers with 50256 ids can be
+    completely different). `tokenizer_kind` is the class, which isn't always
+    the same as the config's `tokenizer_arch` (`char_fixed` builds a `char`).
 
-    `config` is the odd one out — chosen, not observed — but its *hashes* are
-    facts about the run, and this is the file every analysis already reads as
-    columns. Recording them here rather than in `run_id` keeps run ids
-    collision-free (two seeds of one config, or one config re-run, still get
-    distinct directories) and costs nothing: `flatten_dict` surfaces both as
-    `provenance.*` columns in `load_runs`. Optional so an older caller, or a
-    micrograd runner with no RunConfig, still works.
+    `config` is the exception, since it's chosen rather than observed, but its
+    *hashes* are useful facts about the run, and analysis code already reads
+    this file. Keeping them here rather than in `run_id` means run ids never
+    collide (re-running a config still gets a new directory), and `load_runs`
+    shows them as `provenance.*` columns. Optional, so callers without a
+    RunConfig still work.
     """
 
 
@@ -160,13 +154,12 @@ def collect_provenance(
         "git_sha": git(REPO_ROOT, "rev-parse", "HEAD"),
         "git_dirty": find_git_dirty(REPO_ROOT),
         "torch_version": torch.__version__,
-        # The two dependencies whose code decides what a run *means*, rather
-        # than just how fast it goes. `tokenizers_version` is the load-bearing
-        # one already: it's a separate distribution as of the split, so a change
-        # to the merge loop lands without touching this repo's history at all,
-        # and two runs over the same corpus with the same `tokenizer_sha256`
-        # could still have been encoded by different code. The recipe is
-        # fingerprinted; the encoder that reads it wasn't, until now.
+        # The two dependencies whose code changes what a run *means*, not just
+        # how fast it is. `tokenizers` is a separate package, so a change to
+        # its merge loop doesn't show up in this repo's history, and two runs
+        # with the same corpus and `tokenizer_sha256` could still have been
+        # encoded by different code. The fingerprint covers the recipe; this
+        # covers the code that reads it.
         "harness_version": _dist_version(HARNESS_DISTRIBUTION),
         "tokenizers_version": _dist_version("tokenizers"),
         "device_resolved": device,
@@ -175,14 +168,11 @@ def collect_provenance(
         "tokenizer_kind": tokenizer.kind,
         "tokenizer_sha256": fingerprint(tokenizer),
         "hostname": os.uname().nodename,
-        # How many processes shared this run's batch. Provenance rather than
-        # config, and the distinction is the whole reason data parallelism
-        # doesn't fragment `runs/`: `train.batch_size` is global, so eight ranks
-        # and one rank running the same config are the *same experiment* and
-        # share a `group_sha256`. What differs is the machine, and the machine
-        # is what this file is for. Defaulted, so every already-recorded run and
-        # every caller that predates this field still reads as what it was: one
-        # process.
+        # How many processes shared this run's batch. This is provenance rather
+        # than config because `train.batch_size` is global, so the same config
+        # on eight ranks or one is the *same experiment* and has the same
+        # `group_sha256`. Only the machine differs, and that's what this file
+        # records. Defaults to 1, which is right for older runs and callers.
         "world_size": world_size,
     }
 

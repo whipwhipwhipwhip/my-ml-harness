@@ -1,26 +1,24 @@
-"""The two halves of an entry point that aren't about the model or the task.
+"""The parts of an entry point that don't depend on the model or the task.
 
-`nanogpt_conor/train.py` and `gpt_addition/train.py` had the same ~85 lines
-between them: build the model the config names, then wrap training in the
-bookkeeping that makes a run a *record*. Neither half mentions a GPT or an
-addition problem, and both are made of ordering constraints that are silently
-wrong rather than loudly broken when you get them out of order — which is
-exactly the kind of thing that shouldn't be retyped per project.
+`nanogpt_conor/train.py` and `gpt_addition/train.py` had the same ~85 lines in
+common: build the model the config names, then wrap training in the bookkeeping
+that turns a run into a *record*. None of it mentions a GPT or an addition
+problem, and most of it has to happen in a particular order that fails silently
+if you get it wrong, so it's better written once here than copied per project.
 
-What deliberately stayed in the entry points: **loading the data**. The two
-projects disagree about what that even means — nanogpt reads a file through a
-token cache, the adder generates a corpus from its config — and a signature wide
-enough for both would be a signature that describes neither. So `data` arrives
-here already loaded, and this module only reads it through the same duck-typed
-surface `loop.py` already relies on:
+**Loading the data** stays in the entry points. The two projects do it very
+differently (nanogpt reads a file through a token cache, the adder generates a
+corpus from its config), and a signature that fit both would be too vague to be
+useful. So `data` arrives here already loaded, and this module only uses the
+same duck-typed interface `loop.py` does:
 
     data.get_batch(split, batch, block, device, iters, generator)
     data.splits        mapping of split name -> the split's tokens
     data.tokenizer     with .vocab_size, .to_dict()
     data.sha256        content hash of the corpus, for provenance
 
-Same rule as everywhere else in `ml_harness/`: `ARCHES` is passed in, never
-imported, so this module names no model. Torch lives here (it saves
+As everywhere else in `ml_harness/`, `ARCHES` is passed in rather than
+imported, so this module names no model. This module uses torch (to save
 checkpoints), which is why none of it went into the torch-free `store.py`.
 """
 
@@ -54,8 +52,8 @@ from ml_harness.io import _write_json
 class BuiltRun(NamedTuple):
     """Everything `loop.train` needs that comes out of a config plus a device.
 
-    `model` and `runnable` are two names for one set of weights, and the
-    distinction is load-bearing rather than stylistic — see `build_run`.
+    `model` and `runnable` share the same weights, but they're not
+    interchangeable; see `build_run`.
     """
 
     model: torch.nn.Module
@@ -70,25 +68,24 @@ def build_run(
     ARCHES: dict[str, ArchSpec],
     device: torch.device | str,
 ) -> BuiltRun:
-    """Seed, build, compile, and derive the optimiser and schedule — in that order.
+    """Seed, build, compile, then make the optimiser and schedule, in that order.
 
-    Every line here is ordered against the one before it, and getting any of them
-    wrong produces a run that trains fine and means something different:
+    The order matters, and getting it wrong gives a run that trains fine but
+    means something different:
 
-    - **Seed before `build_model`.** Seeding afterwards seeds nothing that
-      matters: the initial weights are already drawn, so the run isn't
-      reproducible and nothing says so.
-    - **`runnable` is a second name, not a replacement.** A checkpoint written
-      from a compiled wrapper has `_orig_mod.`-prefixed keys and won't load into
-      a plain model, so callers checkpoint and sample from `model` and step
-      `runnable`. With compile off they're the same object.
+    - **Seed before `build_model`.** Otherwise the initial weights are already
+      drawn, so the run isn't reproducible and nothing tells you.
+    - **`runnable` is a second name for `model`, not a replacement.** A
+      checkpoint saved from a compiled wrapper has `_orig_mod.`-prefixed keys
+      and won't load into a plain model, so callers save and sample from `model`
+      and train with `runnable`. With compile off they're the same object.
     - **Optimiser from `model`, not `runnable`.** The parameters are the same
-      tensors either way, and this keeps `param_groups` independent of a backend.
-    - **Schedule after the optimiser.** It's a function of the lr the optimiser
-      was built with: `optim.lr` is the *peak*, and the schedule scales it.
+      tensors either way, and this keeps `param_groups` independent of compile.
+    - **Schedule after the optimiser.** `optim.lr` is the *peak*, and the
+      schedule scales it.
 
-    Returned as a NamedTuple rather than a tuple so a caller that only wants the
-    model doesn't have to remember which position it's in.
+    Returns a NamedTuple so callers can use `.model` etc. instead of
+    remembering positions.
     """
     seed_everything(cfg.runtime.seed)
     model = build_model(cfg, vocab_size, ARCHES).to(device)
@@ -100,14 +97,12 @@ def build_run(
 def draw_eval_batches(data, cfg: RunConfig, device: torch.device | str) -> dict:
     """The fixed evaluation set, drawn once from its own generator.
 
-    The generator is the whole point: `runtime.eval_seed` is separate from
-    `runtime.seed`, so validation loss is measured against the same batches
-    regardless of what training's RNG did, and two runs are comparable. Draw
-    these from the training generator and every config change silently moves the
-    yardstick as well as the thing being measured.
+    The separate generator is the point: `runtime.eval_seed` is independent of
+    `runtime.seed`, so validation loss is always measured on the same batches,
+    whatever training's RNG did, and two runs can be compared. If these came
+    from the training RNG, changing the config would change the eval set too.
 
-    Drawn once rather than per eval for the same reason — and because it's a
-    property of the dataset, not of the step.
+    Drawn once rather than at every eval for the same reason.
     """
     eval_gen = make_generator(cfg.runtime.eval_seed)
     return {
@@ -130,15 +125,14 @@ def checkpoint_payload(
     vocab_size: int,
     cfg: RunConfig,
 ) -> dict:
-    """What a checkpoint contains, in one place because it's written from two.
+    """What goes in a checkpoint. Defined once because two places write one.
 
-    `vocab_size` and `config` ride along because a bare `state_dict` isn't
-    loadable on its own: rebuilding the module to load it into needs the config
-    that shaped it and the vocabulary that sized its embedding. `store.py` hands
-    out the path and never learns what goes in it, which is what keeps it
-    torch-free for the micrograd side.
+    `vocab_size` and `config` are included because a `state_dict` alone isn't
+    enough to load: you need the config and the vocabulary size to rebuild the
+    module first. `store.py` only provides the path and never sees what's in
+    the file, which keeps it torch-free.
 
-    Pass `model`, never a compiled wrapper — see `build_run`.
+    Pass `model`, never a compiled wrapper (see `build_run`).
     """
     return {
         "model": model.state_dict(),
@@ -150,14 +144,13 @@ def checkpoint_payload(
 
 
 class RunRecord:
-    """The handle `record_run` yields, for the caller to report its result into.
+    """The object `record_run` yields, for the caller to put its result in.
 
-    Exists because the thing the `finally` block needs — which step training
-    reached — is produced *inside* the `with`, and a context manager can't return
-    a value out of its own body. Defaulting `result` to `{}` is what makes the
-    crash-before-the-first-step case work: `train()` never returned, so there is
-    no final step, and `-1` is the honest answer rather than a `NameError`
-    raised from inside cleanup.
+    `record_run`'s cleanup needs to know which step training reached, but that's
+    only known *inside* the `with` block, and a context manager can't get a
+    return value out of its body. `result` defaults to `{}` to handle a crash
+    before the first step: `train()` never returned, so the final step is
+    recorded as -1 rather than cleanup failing with a `NameError`.
     """
 
     def __init__(self) -> None:
@@ -176,33 +169,30 @@ def record_run(
     smoke: bool = False,
     world_size: int = 1,
 ) -> Iterator[tuple[RunDir, RunRecord]]:
-    """Open a run directory, then close it out whatever happens inside.
+    """Open a run directory, and close it out properly however the block exits.
 
-    The reason this is a context manager and not two functions: **the exit path
-    is the part worth sharing.** A run that crashes at step 40 or takes a Ctrl-C
-    still has to leave a complete, readable record — status, summary, and a
-    `last` checkpoint — and the three ways out (returned, raised, interrupted)
-    have to converge on that without the caller remembering to. Written as a
-    `try`/`finally` in each entry point, it's a paragraph of subtle control flow
-    duplicated per project.
+    It's a context manager because **the exit handling is the useful part.** A
+    run that crashes at step 40 or gets a Ctrl-C should still leave a complete
+    record (status, summary and a `last` checkpoint), whether it returned,
+    raised or was interrupted. Writing that `try`/`finally` in every entry point
+    would mean copying some fiddly control flow into each project.
 
-    The distinction between the two non-happy exits is deliberate:
+    The two ways of failing are handled differently on purpose:
 
-    - **KeyboardInterrupt is swallowed**, recorded as `interrupted`. Stopping a
-      run you're watching is a normal way to end one, not a failure, and the
-      record should say which. (`sweep.py` depends on this: it reads
-      `status.json` back precisely *because* `run()` returns normally here.)
-    - **Every other exception is recorded and re-raised.** A bug should still
-      reach the terminal with its traceback; the record just isn't lost on the
-      way.
+    - **KeyboardInterrupt is swallowed** and recorded as `interrupted`.
+      Stopping a run you're watching is a normal way to end it, not a failure.
+      (`sweep.py` relies on this: since `run()` returns normally after a Ctrl-C,
+      it reads `status.json` to find out.)
+    - **Any other exception is recorded and re-raised**, so a bug still shows
+      up in the terminal with its traceback.
 
-    Ordering inside: the directory appears *before* training starts, so a run
-    killed at step 3 is still readable, and `tokenizer.json` is written up front
-    for the same reason — without it a checkpoint is undecodable integers, since
-    the corpus is gitignored.
+    The directory is created *before* training starts, so a run killed at step
+    3 can still be read. `tokenizer.json` is written up front for the same
+    reason: without it a checkpoint's ids can't be decoded, since the corpus is
+    gitignored.
 
-    Yields `(rd, record)`. Assign the result of `loop.train` to `record.result`;
-    everything else is handled.
+    Yields `(rd, record)`. Put the result of `loop.train` in `record.result`
+    and everything else is handled.
     """
     vocab_size = data.tokenizer.vocab_size
 
@@ -219,9 +209,8 @@ def record_run(
             world_size,
         ),
     )
-    # Written here rather than inside `new_run` for the same reason the
-    # checkpoints are: store.py hands out the path and stays ignorant of the
-    # contents.
+    # Written here rather than in `new_run`, like the checkpoints: store.py
+    # provides the path but doesn't know about the contents.
     _write_json(rd.tokenizer_path, data.tokenizer.to_dict())
 
     started_at = datetime.now(timezone.utc)
@@ -254,8 +243,8 @@ def record_run(
             error=error,
             smoke=smoke,
         )
-        # Reads the metrics file back, which is why the caller's MetricLogger has
-        # to be closed by now — i.e. its `with` belongs *inside* this one.
+        # This reads the metrics file back, so the caller's MetricLogger must be
+        # closed by now, i.e. its `with` goes *inside* this one.
         write_summary(rd, summarize(rd.metrics_path))
         torch.save(
             checkpoint_payload(

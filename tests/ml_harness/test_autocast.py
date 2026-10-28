@@ -1,16 +1,14 @@
 """`runtime.autocast_dtype`: the context, its scoping, and the run record.
 
-Everything runs on CPU, where bf16 autocast is supported and observable — the
-assertions are about *dtypes*, which are exact, rather than about speed, which
-isn't testable. The load-bearing ones are the two that pin the scoping decision:
-activations become bf16, and parameters and their gradients do not. If a future
-edit moves `backward()` inside the context, or casts the model instead of its
-inputs, those are the tests that notice.
+Everything runs on CPU, where bf16 autocast works. The tests check *dtypes*,
+which are exact, rather than speed, which can't really be tested. The important
+ones check what autocast covers: activations become bf16, but parameters and
+their gradients don't. If `backward()` is ever moved inside the context, or the
+model is cast instead of its inputs, those tests will catch it.
 
-The tests that drive a real `run()` use `testing.run`, the reference entry point
-shipped beside the reference arch. They are the expensive tier of this module —
-they write a run directory — but they need no project, so the portability rule
-holds: nothing here imports anything the harness doesn't ship.
+The tests that do a real run use `testing.run`. They're the slow ones here,
+since they write a run directory, but they still only use what the harness
+ships.
 """
 
 from __future__ import annotations
@@ -37,7 +35,7 @@ DEVICE = torch.device("cpu")
 # ---- the context itself ---------------------------------------------------
 
 def test_none_means_fp32_via_a_nullcontext():
-    """The default path costs nothing — no autocast object, no branch in the loop."""
+    """The default is a nullcontext: no autocast and no branch in the loop."""
     assert isinstance(autocast_context(DEVICE, None), contextlib.nullcontext)
 
 
@@ -49,8 +47,8 @@ def test_bf16_casts_activations():
 
 
 def test_bf16_leaves_the_parameters_in_fp32():
-    """Autocast casts op *inputs*, not the module. The master weights stay fp32,
-    which is what stops a small update vanishing into a large weight."""
+    """Autocast casts the inputs to each op, not the module. The weights stay
+    fp32, which stops small updates from disappearing into large weights."""
     model = torch.nn.Linear(8, 8)
     with autocast_context(DEVICE, "bf16"):
         model(torch.randn(4, 8))
@@ -58,7 +56,7 @@ def test_bf16_leaves_the_parameters_in_fp32():
 
 
 def test_the_context_is_reusable_across_iterations():
-    """One instance per run, entered every step — the loop relies on this."""
+    """One instance per run, entered every step; the loop relies on this."""
     amp = autocast_context(DEVICE, "bf16")
     model = torch.nn.Linear(8, 8)
     for _ in range(3):
@@ -67,7 +65,7 @@ def test_the_context_is_reusable_across_iterations():
 
 
 def test_fp16_is_rejected_and_says_why():
-    """Not an oversight: without a GradScaler, fp16 gradients underflow to zero."""
+    """On purpose: without a GradScaler, fp16 gradients underflow to zero."""
     with pytest.raises(RuntimeError, match="GradScaler"):
         autocast_context(DEVICE, "fp16")
 
@@ -89,9 +87,9 @@ def _train_once(harness, amp, *overrides):  # noqa: F811
 
 
 def test_gradients_stay_fp32_under_bf16(harness):  # noqa: F811
-    """The observable consequence of keeping `backward()` outside the context:
-    autograd matches the forward's dtypes on its own, and the fp32 parameters
-    receive fp32 grads, so the optimiser step is unchanged."""
+    """Because `backward()` is outside the context, autograd matches the
+    forward's dtypes by itself, and the fp32 parameters get fp32 gradients, so
+    the optimiser step is unchanged."""
     model, _ = _train_once(harness, autocast_context(DEVICE, "bf16"))
     assert model.emb.weight.grad.dtype is torch.float32
 
@@ -120,7 +118,7 @@ def test_eval_loss_is_a_finite_python_float_under_bf16(harness):  # noqa: F811
 
 
 def test_evaluate_defaults_to_fp32_when_given_no_context(harness):  # noqa: F811
-    """The default keeps every pre-existing caller — and every old test — correct."""
+    """So existing callers (and older tests) that don't pass a context still work."""
     model, _, _, _, eval_batches = harness()
     assert evaluate(model, eval_batches["val"]) == pytest.approx(
         evaluate(model, eval_batches["val"], None)
@@ -128,9 +126,9 @@ def test_evaluate_defaults_to_fp32_when_given_no_context(harness):  # noqa: F811
 
 
 def test_evaluate_under_bf16_is_close_but_not_identical(harness):  # noqa: F811
-    """Sanity that the context reaches eval at all: bf16 has ~8 mantissa bits, so
-    the same batches give a nearby but different number. Loose tolerance — the
-    point is 'measured differently', not any particular error."""
+    """Checks the context is actually used in eval: bf16 has ~8 mantissa bits,
+    so the same batches give a close but different number. The tolerance is
+    loose because we only care that it's different, not by how much."""
     model, _, _, _, eval_batches = harness()
     fp32 = evaluate(model, eval_batches["val"])
     bf16 = evaluate(model, eval_batches["val"], autocast_context(DEVICE, "bf16"))
@@ -150,8 +148,8 @@ def test_settable_from_an_override(config_path):
 
 
 def test_two_dtypes_are_two_experiments():
-    """Same reasoning as matmul_precision: different arithmetic, so the losses
-    aren't poolable."""
+    """Same as matmul_precision: different arithmetic, so the losses shouldn't
+    be averaged together."""
     base = {"runtime": {"seed": 0, "device": "cpu", "autocast_dtype": None}}
     other = {"runtime": {**base["runtime"], "autocast_dtype": "bf16"}}
     assert group_sha256(other) != group_sha256(base)
@@ -183,8 +181,8 @@ def test_a_bf16_run_writes_an_fp32_checkpoint(config_path, runs_root):
 
 
 def test_a_bad_dtype_fails_before_a_run_directory_exists(config_path, runs_root):
-    """Validated next to the device, not at the call site: a typo shouldn't leave
-    a failed run behind."""
+    """Checked up front with the device, so a typo doesn't leave a failed run
+    directory behind."""
     with pytest.raises(RuntimeError, match="Unknown autocast dtype"):
         run(
             config_path,

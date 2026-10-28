@@ -1,33 +1,32 @@
-"""A training loop that measures itself instead of learning anything.
+"""A training loop that times itself instead of learning anything.
 
-Same contract as `loop.py`: takes objects, returns facts. No I/O, no filesystem,
-no argparse — the import list is `torch` and `RunConfig`. Separate module rather
-than a flag on `train()` because the two want opposite things. `train()` should
-never sync the device or drop an eval to keep a number honest; a benchmark has to
-do both, and mixing them would put timing branches inside the loop that runs for
-real.
+Same rules as `loop.py`: takes objects, returns results, no I/O, no filesystem,
+no argparse, and only imports `torch` and `RunConfig`. It's a separate module
+rather than a flag on `train()` because the two want opposite things: `train()`
+shouldn't sync the device or skip evals just to get accurate timings, and a
+benchmark has to do both. Mixing them would put timing code inside the real
+training loop.
 
-What makes the numbers mean something:
+What makes the numbers trustworthy:
 
-  * **Synchronisation.** CUDA and MPS queue work asynchronously, so `perf_counter`
-    around a forward/backward measures how long it took to *enqueue* the kernels —
-    on MPS the first iterations look impossibly fast and the cost turns up
-    wherever the next sync happens. `sync_fn` blocks until the queue drains, so
-    each interval covers the work it brackets. On CPU it's a no-op and costs
+  * **Synchronisation.** CUDA and MPS run work asynchronously, so timing a
+    forward/backward with `perf_counter` only measures how long it took to
+    *queue* the kernels. On MPS the first iterations look impossibly fast and the
+    real cost shows up at the next sync. The sync function waits for the queue
+    to finish, so each interval covers the work inside it. On CPU it does
     nothing.
-  * **Warmup.** The first iterations pay for lazy kernel compilation, allocator
-    growth and cache-warming, and on MPS that can be an order of magnitude. They
-    run (the steady state depends on the allocator having grown) but are dropped
-    from the statistics, and the count is reported so a suspicious mean can be
-    re-read.
-  * **No `.item()`.** Reading the loss back is itself a sync point, so a loop that
-    logged its loss would be measuring a slightly different program than the one
-    being timed. Nothing here reads a tensor's value.
+  * **Warmup.** The first iterations pay for kernel compilation, the allocator
+    growing and caches warming up, and on MPS that can be 10x slower. They still
+    run (the steady state depends on them) but aren't counted, and the number
+    skipped is reported.
+  * **No `.item()`.** Reading the loss back forces a sync, so a loop that logged
+    its loss would be timing a slightly different program. Nothing here reads a
+    tensor's value.
 
-Batch construction is timed separately from the optimisation step. They're both
-real wall time — tokens/sec is quoted against their sum — but the split is the
-answer to "is this model slow, or is `get_batch` stacking on the CPU while the
-GPU idles", which is a different fix.
+Building the batch is timed separately from the optimiser step. Both are real
+time, and tokens/sec uses their sum, but the split tells you whether the model
+is slow or whether `get_batch` is busy on the CPU while the GPU waits, which
+need different fixes.
 """
 
 from __future__ import annotations
@@ -46,7 +45,7 @@ from ml_harness.config import RunConfig
 def make_sync(device) -> Callable[[], None]:
     """A function that blocks until `device` has finished the work queued on it.
 
-    CPU is genuinely synchronous, so the no-op is correct rather than a fallback.
+    CPU is already synchronous, so a no-op is correct there.
     """
     kind = torch.device(device).type
     if kind == "cuda":
@@ -67,10 +66,9 @@ def _percentile(sorted_values: list[float], q: float) -> float:
 def _stats(values: list[float]) -> dict[str, float]:
     """mean/std/min/median/p90/max over a list of measurements.
 
-    Median and p90 rather than mean alone because iteration times are not
-    symmetric: a GC pause or a page fault shifts the mean and leaves the median
-    where it was, and the gap between the two is the signal that something
-    intermittent is happening.
+    Median and p90 as well as the mean, because iteration times are skewed: a
+    GC pause or a page fault moves the mean but not the median, and a gap
+    between the two means something intermittent is going on.
     """
     if not values:
         return {}
@@ -91,10 +89,10 @@ def _stats(values: list[float]) -> dict[str, float]:
 class BenchResult:
     """Per-iteration measurements, plus enough context to interpret them.
 
-    Holds the raw lists, not just the summary: the shape of the series is the
-    interesting part when a run is bimodal, and `summary()` can always be
-    recomputed from them. One entry per *measured* iteration — warmup is already
-    excluded, and `warmup` records how many were dropped.
+    Keeps the raw lists, not just the summary, since the shape of the series
+    is what's interesting when timings are bimodal, and `summary()` can always
+    be recomputed. One entry per *measured* iteration: warmup is already
+    excluded, and `warmup` records how many were skipped.
     """
 
     batch_s: list[float]
@@ -111,21 +109,21 @@ class BenchResult:
     def tokens_per_s(self) -> list[float]:
         """Throughput per iteration, against total iteration time.
 
-        Against the total rather than the step alone: a token that took 3ms to
-        stack cost 3ms, whoever was idle while it happened.
+        Uses the total rather than just the step, since time spent building
+        the batch is still time spent.
         """
         return [self.tokens_per_iter / t for t in self.iter_s]
 
     def summary(self) -> dict:
-        """The whole thing as plain data — JSON-serialisable, torch-free."""
+        """Everything as plain data, JSON-serialisable and torch-free."""
         iters = self.iter_s
         return {
             "iters": len(iters),
             "warmup": self.warmup,
             "tokens_per_iter": self.tokens_per_iter,
-            # total_s over the measured iterations only; the aggregate throughput
-            # below is what you'd get by timing the whole block with one stopwatch,
-            # which is not quite the mean of the per-iteration rates
+            # total_s only covers measured iterations. The aggregate throughput
+            # below is what you'd get timing the whole block at once, which isn't
+            # quite the same as the mean of the per-iteration rates
             "total_s": sum(iters),
             "tokens_per_s_aggregate": (
                 self.tokens_per_iter * len(iters) / sum(iters) if iters else float("nan")
@@ -150,17 +148,19 @@ def benchmark(
 ) -> BenchResult:
     """Run `warmup + n_iters` training steps, timing the last `n_iters` of them.
 
-    The body is deliberately the same four lines as `loop.train`'s — forward,
-    zero_grad, backward, step, with the same autocast scoping — because a
-    benchmark of a different loop measures a different program. What's absent is
-    the whole reason this exists: no eval, no logging, no sampling, no
-    checkpointing, nothing that reads a tensor back.
+    The body is the same as `loop.train`'s (forward, zero_grad, backward,
+    step, with autocast in the same place), because timing a different loop
+    would tell you about a different program. What's missing is the point: no
+    eval, no logging, no sampling, no checkpointing, and nothing that reads a
+    tensor back.
+
+    Note that it doesn't do gradient accumulation, so it always runs the whole
+    `train.batch_size` in one pass.
 
     on_iter: optional callable(i, seconds, measured: bool) for progress output.
-             The caller's business; this module doesn't print.
-    amp:     the autocast context, or None for fp32. Same source and same
-             scoping as `loop.train` — measuring it wrapped differently would
-             be measuring a program the harness can't run.
+             This module doesn't print anything itself.
+    amp:     the autocast context, or None for fp32, used the same way as in
+             `loop.train`.
     """
     amp = amp if amp is not None else contextlib.nullcontext()
     sync = make_sync(device)
@@ -172,18 +172,18 @@ def benchmark(
     batch_s: list[float] = []
     step_s: list[float] = []
 
-    # dropout on: this is timing the training step, and dropout is part of it
+    # Dropout on: this is timing the training step, and dropout is part of it
     model.train()
 
-    # Everything is enqueued before the first measurement, so t0 isn't paying for
-    # work the caller queued (moving the model to the device, say).
+    # Wait for anything already queued (e.g. moving the model to the device),
+    # so the first measurement doesn't include it.
     sync()
 
     for i in range(warmup + n_iters):
         t0 = time.perf_counter()
         xb, yb = data.get_batch("train", batch_size, block_size, str(device))[0]
-        # the host->device copy is part of batch construction, and on MPS/CUDA
-        # it's async, so it has to be drained before the clock splits
+        # The host->device copy counts as building the batch, and on MPS/CUDA
+        # it's async, so wait for it before taking the time
         sync()
         t1 = time.perf_counter()
 

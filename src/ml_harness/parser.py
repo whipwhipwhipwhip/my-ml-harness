@@ -1,25 +1,25 @@
-"""The command-line edge, and nothing else.
+"""Command-line parsing, and nothing else.
 
-**This module knows no paths.** It used to compute `REPO_ROOT` as
-`Path(__file__).resolve().parents[3]` and hang `configs/`, `configs/sweeps/` and
-`runs/` off it — an assertion about where this file sits in somebody's tree,
-which is true exactly once. Installed as a dependency rather than an editable
-checkout, `parents[3]` lands in `site-packages/`, and the failure is quiet: the
-defaults still resolve to *a* path, just not one that exists.
+**This module has no built-in paths.** It used to compute `REPO_ROOT` as
+`Path(__file__).resolve().parents[3]` and put `configs/`, `configs/sweeps/` and
+`runs/` under it. That only works if the file is where you expect in one
+particular checkout. Once the harness is installed as a dependency,
+`parents[3]` lands in `site-packages/`, and nothing complains: the defaults
+still point at *a* path, just not one that exists.
 
-So the defaults arrive as arguments. Every entry point already computes its own
-repo root — it needs one for provenance anyway — and passing them down is the
-same rule the rest of `ml_harness/` follows: `collect_provenance(repo_root=...)`,
-`run_sweep(repo_root=...)`, `record_run(repo_root=...)`. The house rule is now
-uniform: **`ml_harness/` resolves no path it wasn't given.**
+So the defaults are passed in as arguments. Every entry point already knows its
+own repo root (it needs one for provenance anyway), and the rest of
+`ml_harness/` already works this way: `collect_provenance(repo_root=...)`,
+`run_sweep(repo_root=...)`, `record_run(repo_root=...)`. The rule is:
+**`ml_harness/` never makes up a path it wasn't given.**
 
-A default of `None` means "the project didn't supply one", which makes the flag
-`required` rather than silently pointing somewhere wrong. The one exception is
-`parse_sweep_args`' `--config`, where absent genuinely means "don't override the
-sweep file's own base".
+A default of `None` means the project didn't supply one, which makes the flag
+`required` rather than quietly pointing somewhere wrong. The one exception is
+`--config` in `parse_sweep_args`, where leaving it out means "use the sweep
+file's own base config".
 
-`argv` is threaded through so these can be tested, and so a notebook can call one
-with a list instead of editing `sys.argv`.
+`argv` is a parameter so these can be tested, and so a notebook can pass a list
+instead of editing `sys.argv`.
 """
 
 from __future__ import annotations
@@ -95,15 +95,15 @@ def parse_bench_args(
 ):
     """The benchmark CLI. Same `--config`/`--set` edge as `parse_args`.
 
-    No `--runs-root` and no `--smoke`: a benchmark writes no run directory, and
-    smoke's whole point is shrinking the model, which is the thing being timed.
+    No `--runs-root` and no `--smoke`: a benchmark doesn't write a run
+    directory, and `--smoke` shrinks the model, which is what's being timed.
     """
     parser = argparse.ArgumentParser()
 
     _add_config(parser, config_default)
     _add_set(
         parser,
-        "Override config values (can be repeated) — this is how you vary a config",
+        "Override config values (can be repeated); this is how you vary a config",
     )
 
     parser.add_argument(
@@ -135,11 +135,11 @@ def parse_sweep_args(
     runs_root_default: Path | str | None = None,
     argv: Sequence[str] | None = None,
 ):
-    """The sweep CLI. Separate function, same edge: argparse lives in `main()`.
+    """The sweep CLI.
 
-    Deliberately thin — the grid is in the sweep file, not in flags, so that a
-    sweep is an artifact you can diff and re-run rather than a shell line in
-    somebody's history.
+    Has very few flags on purpose: the grid goes in the sweep file, so a sweep
+    is a file you can diff and re-run, rather than a command in your shell
+    history.
     """
     parser = argparse.ArgumentParser()
 
@@ -150,8 +150,8 @@ def parse_sweep_args(
         help="Path to a sweep JSON (see configs/sweeps/)",
     )
 
-    # The one flag that stays optional with no project default: absent means
-    # "use the base the sweep file names", not "the project forgot to say".
+    # Optional even without a project default: leaving it out means "use the
+    # base config the sweep file names".
     parser.add_argument(
         "--config",
         type=Path,
@@ -165,13 +165,13 @@ def parse_sweep_args(
     parser.add_argument(
         "--smoke",
         action="store_true",
-        help="Run every point at smoke size — validates the whole grid in a minute",
+        help="Run every point at smoke size, to check the whole grid in a minute",
     )
 
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Print the expanded points and exit. Read the count before committing an hour",
+        help="Print the expanded points and exit, to check the count before a long sweep",
     )
 
     return parser.parse_args(argv)

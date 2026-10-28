@@ -1,12 +1,12 @@
-"""ml_harness/schedule.py — arithmetic, so these are arithmetic tests.
+"""ml_harness/schedule.py, which is just arithmetic, so these are arithmetic tests.
 
-No model, no optimiser, no tmpdir, no torch. That's the point of the schedule
-being a closure over three numbers: "what lr does step 700 get" is answerable in
-microseconds. If a test here starts needing a run, the schedule has grown a
-dependency on something other than the step number.
+No model, no optimiser, no tmpdir, no torch. Because a schedule is just a
+function of the step, "what lr does step 700 get" takes microseconds to check.
+If a test here starts needing a run, the schedule depends on something it
+shouldn't.
 
-`test_loop.py` covers the other half — that the loop writes what this returns
-into the optimiser.
+`test_loop.py` checks the other half: that the loop puts what this returns into
+the optimiser.
 """
 
 from __future__ import annotations
@@ -38,7 +38,7 @@ def test_constant_is_the_peak_forever():
 # ---- warmup ---------------------------------------------------------------
 
 def test_warmup_first_step_is_small_but_not_zero():
-    """Exactly 0 would be a step that updates nothing — a wasted iteration."""
+    """Exactly 0 would be a step that updates nothing, i.e. a wasted iteration."""
     lr = cosine(warmup_steps=100)
     assert 0 < lr(0) < PEAK / 50
 
@@ -105,7 +105,7 @@ def test_holds_the_floor_after_decay_steps():
 
 
 def test_floor_is_a_fraction_of_the_peak_it_was_built_with():
-    """The scale-invariance the fraction was chosen for."""
+    """Changing the peak moves the floor with it, which is why it's a fraction."""
     for peak in (1e-2, 3e-4, 1e-6):
         assert cosine(peak=peak, decay_steps=1000)(2000) == pytest.approx(peak * 0.1)
 
@@ -134,7 +134,7 @@ def test_a_run_shorter_than_the_warmup_does_not_explode():
     lr = cosine(max_iters=4, warmup_steps=100, decay_steps=None)
     values = [lr(s) for s in range(4)]
     assert all(0 < v <= PEAK for v in values)
-    # past the (never-reached) warmup, the floor is the honest answer
+    # past the (never-reached) end of warmup, the lr is the floor
     assert lr(100) == pytest.approx(0.1 * PEAK)
 
 
@@ -146,9 +146,9 @@ def test_never_exceeds_the_peak():
 def test_the_floor_bounds_the_decay_not_the_warmup():
     """Warmup ramps from ~0, so it passes *below* the floor on the way up.
 
-    Deliberate, and what nanoGPT does: the floor says where the decay stops, not
-    that the lr is never smaller than it. A warmup clamped to the floor would
-    start at 10% of peak, which is most of the way to no warmup at all.
+    This is on purpose, and it's what nanoGPT does: the floor is where the
+    decay stops, not a minimum for the whole run. Starting warmup at the floor
+    would mean starting at 10% of peak, which is barely a warmup.
     """
     lr = cosine(warmup_steps=137, decay_steps=911, min_lr_frac=0.1)
     assert lr(0) < 0.1 * PEAK
@@ -163,8 +163,8 @@ def test_is_finite_everywhere():
 # ---- config plumbing ------------------------------------------------------
 
 def test_default_is_constant_at_optim_lr(config_path):
-    """No `schedule` block in the file: every config written before this loads,
-    and keeps the numerics it had."""
+    """No `schedule` block in the file: older configs still load and train
+    exactly as before."""
     cfg = load_run_config(config_path, ARCHES, DATAS)
     assert cfg.schedule_arch == "constant"
     lr = build_lr_schedule(cfg)
@@ -172,7 +172,7 @@ def test_default_is_constant_at_optim_lr(config_path):
 
 
 def test_cosine_is_selectable_by_override_against_a_file_without_the_block(config_path):
-    """The reason load_run_config seeds `schedule` before applying overrides."""
+    """This is why load_run_config adds an empty `schedule` before applying overrides."""
     cfg = load_run_config(
         config_path,
         ARCHES,
@@ -221,7 +221,7 @@ def test_fraction_outside_the_unit_interval_rejected(frac):
 
 
 def test_decay_steps_below_warmup_rejected():
-    """Stated, so it's a contradiction rather than a short run — see the
-    smoke case above, which is the same arithmetic and is allowed."""
+    """Set explicitly, so it's a contradiction rather than a short run. Compare
+    the smoke case above, which is the same arithmetic but allowed."""
     with pytest.raises(ValueError, match="decay_steps"):
         CosineScheduleConfig(warmup_steps=100, decay_steps=50)

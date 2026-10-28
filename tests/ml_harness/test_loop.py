@@ -1,9 +1,9 @@
 """ml_harness/loop.py, driven with fakes.
 
-No filesystem, no run directory, no GPT. The loop's contract is narrow enough that
-a nine-line model and a list-appending logger are complete implementations of it —
-if that stops being true, the loop has grown a dependency it shouldn't have, and
-these tests get harder to write. That difficulty is the signal.
+No filesystem, no run directory, no GPT. The loop needs so little that a
+nine-line model and a logger that appends to a list are enough to drive it. If
+that stops being true, the loop has picked up a dependency it shouldn't have,
+and these tests will get harder to write.
 """
 
 from __future__ import annotations
@@ -23,13 +23,11 @@ DEVICE = torch.device("cpu")
 
 
 class StubModel(nn.Module):
-    """A complete implementation of what the loop asks a model for.
+    """Everything the loop needs from a model, and nothing more.
 
-    Deliberately not `harness.testing.TinyModel`: that one is the *reference
-    architecture*, realistic enough to checkpoint and sample from. This is the
-    opposite claim — that the loop's contract is narrow enough for an embedding
-    and a cross-entropy to satisfy it. Keeping them separate is what makes the
-    claim visible.
+    Not `testing.TinyModel` on purpose: that one is meant to be realistic
+    enough to checkpoint and sample from. This one shows the opposite, that an
+    embedding and a cross-entropy are all the loop needs.
     """
 
     def __init__(self, vocab_size: int):
@@ -89,13 +87,13 @@ def test_final_step_evaluates_even_when_the_interval_would_skip_it(harness):
 
 
 def test_eval_fires_more_than_once_in_smoke_sizing(harness):
-    """Smoke's whole reason for 4 iters: `val < best_val` must be a real comparison."""
+    """Why smoke runs use 4 iters: so `val < best_val` is a real comparison."""
     _, _, on_eval, _ = run_loop(harness, "train.max_iters=4", "train.eval_interval=2")
     assert len(on_eval.calls) > 1
 
 
 def test_on_eval_runs_after_the_metrics_are_logged(harness):
-    """The documented division of labour; a checkpoint callback relies on it."""
+    """Metrics are logged before on_eval runs; a checkpoint callback relies on it."""
     _, logger, on_eval, _ = run_loop(harness, "train.max_iters=4", "train.eval_interval=2")
     # by the first call: 1 batch_loss + 1 lr + 2 eval losses
     assert on_eval.logged_at_call[0] == 4
@@ -123,7 +121,7 @@ def test_losses_are_finite(harness):
 
 
 def test_losses_are_floats_not_tensors(harness):
-    """`.item()` in the loop is what keeps json.dumps from choking downstream."""
+    """The loop calls `.item()`, so json.dumps can handle the values later."""
     _, logger, _, _ = run_loop(harness, "train.max_iters=2")
     assert all(type(v) is float for *_, v in logger.records)
 
@@ -131,7 +129,7 @@ def test_losses_are_floats_not_tensors(harness):
 # ---- that it actually trains ----------------------------------------------
 
 def test_parameters_change(harness):
-    """Proves backward + step are wired, not just that the loop counts to four."""
+    """Checks backward and step actually run, not just that the loop counts to four."""
     model, optimiser, data, cfg, eval_batches = harness("train.max_iters=4")
     before = model.emb.weight.detach().clone()
     train(model, optimiser, data, cfg, DEVICE, eval_batches, FakeLogger(), SpyEval())
@@ -147,10 +145,10 @@ def test_loss_decreases_over_a_longer_run(harness):
 
 # ---- the lr schedule ------------------------------------------------------
 #
-# The schedule's arithmetic is tested in test_schedule.py. What's left for the
-# loop is the wiring: that it calls the closure, that the optimiser actually
-# sees the result, and that it gets logged. A `lambda step: ...` is the whole
-# contract, so none of this needs a real schedule.
+# The schedule maths is tested in test_schedule.py. Here we only check the
+# wiring: that the loop calls the function, that the optimiser gets the result,
+# and that it's logged. Any `lambda step: ...` will do, so none of this needs a
+# real schedule.
 
 def test_schedule_reaches_the_optimiser(harness):
     model, optimiser, data, cfg, eval_batches = harness("train.max_iters=4")
@@ -170,18 +168,18 @@ def test_schedule_reaches_the_optimiser(harness):
 
 
 def test_no_schedule_leaves_the_optimiser_alone(harness):
-    """Default None: every run recorded before schedules keeps its lr."""
+    """Default None: runs from before schedules existed keep their lr."""
     model, optimiser, data, cfg, eval_batches = harness("train.max_iters=4")
     train(model, optimiser, data, cfg, DEVICE, eval_batches, FakeLogger(), SpyEval())
     assert optimiser.param_groups[0]["lr"] == cfg.optim.lr
 
 
 def test_every_param_group_is_scheduled(harness):
-    """Scheduling only the first group would be a silent trap, and the weight
-    decay split makes it a live one: a real optimiser now has two groups, and
-    the second would sit at its build-time lr forever. Kept as a hand-added
-    group so the claim stays about the loop rather than about `build_optimiser`
-    — test_weight_decay.py makes it against the real split."""
+    """Only scheduling the first group would be an easy bug to miss, and with
+    the weight decay split a real optimiser has two groups, so the second would
+    stay at its starting lr forever. This adds a group by hand so the test is
+    about the loop rather than `build_optimiser`; test_weight_decay.py checks
+    the real split."""
     model, optimiser, data, cfg, eval_batches = harness("train.max_iters=1")
     optimiser.add_param_group({"params": [torch.zeros(1, requires_grad=True)]})
     train(
@@ -213,11 +211,11 @@ def grad_norm_at_step(harness, *overrides):
     """The global grad norm the optimiser was handed, on the first step.
 
     A hook on `optimiser.step` is the only place to read it: the loop clips
-    in between, and by the time `train()` returns the gradients are the last
-    step's, not the clipped one's.
+    just before the step, and by the time `train()` returns the gradients are
+    from the last step, not the first.
 
-    Seeded because both the initial weights and the training batch come off the
-    global RNG, and these tests compare one call's norm against another's.
+    Seeded because the initial weights and the training batch both come from
+    the global RNG, and these tests compare the norm between calls.
     """
     torch.manual_seed(0)
     model, optimiser, data, cfg, eval_batches = harness("train.max_iters=1", *overrides)
@@ -236,9 +234,9 @@ def grad_norm_at_step(harness, *overrides):
 
 
 def test_no_clipping_by_default(harness):
-    """Every run recorded before grad_clip existed has to keep its numerics.
+    """Runs from before grad_clip existed have to train exactly as they did.
 
-    Also what makes the 0.01 in the next test a real cap rather than a no-op.
+    This also shows the 0.01 in the next test really does cap something.
     """
     assert grad_norm_at_step(harness) > 0.1
 
@@ -249,14 +247,14 @@ def test_clipping_caps_the_global_norm(harness):
 
 
 def test_a_generous_clip_leaves_the_gradient_alone(harness):
-    """Clipping is a ceiling, not a normalisation: under it, nothing changes."""
+    """Clipping is a ceiling, not a normalisation: below it, nothing changes."""
     assert grad_norm_at_step(harness, "train.grad_clip=1e6") == pytest.approx(
         grad_norm_at_step(harness)
     )
 
 
 def test_zero_clip_is_rejected_at_load(harness):
-    """Silently zeroing every gradient trains nothing and looks fine doing it."""
+    """Zeroing every gradient would train nothing but look fine."""
     with pytest.raises(ValueError, match="grad_clip"):
         harness("train.grad_clip=0")
 
@@ -264,16 +262,16 @@ def test_zero_clip_is_rejected_at_load(harness):
 # ---- gradient accumulation ------------------------------------------------
 
 class ChunkedData:
-    """A `data` that hands out one fixed batch, sliced to whatever size is asked.
+    """A `data` that always returns the same batch, sliced to the size asked for.
 
-    This is what takes the RNG out of the comparison. With the real `get_batch`,
-    one step at batch_size 4 and two micro-steps at 2 draw different rows, so
-    their gradients would differ for a reason that has nothing to do with
-    accumulation. Here both paths see exactly the same 4 sequences, and any
-    difference in the resulting gradient is the mechanism's fault.
+    This takes randomness out of the comparison. With the real `get_batch`, one
+    step at batch_size 4 and two micro-steps at 2 would draw different rows, so
+    their gradients would differ for reasons unrelated to accumulation. Here
+    both see the same 4 sequences, so any difference in the gradient is down to
+    accumulation itself.
 
-    Records what it was asked for, which is how the tests below see the shape of
-    the loop's requests without instrumenting the loop.
+    It also records what it was asked for, so the tests below can check the
+    loop's requests without instrumenting the loop.
     """
 
     def __init__(self, x, y):
@@ -295,11 +293,10 @@ class ChunkedData:
 def one_step(harness, *overrides):
     """One training step over a fixed batch. Returns (gradients, data, logger).
 
-    The gradient is read off in a hook on `optimiser.step`, for the same reason
-    `grad_norm_at_step` does it: that is the only moment the accumulated
-    gradient exists, and by the time `train()` returns it has been replaced.
+    The gradient is read in a hook on `optimiser.step`, like in
+    `grad_norm_at_step`: that's the only time the accumulated gradient exists.
 
-    Seeded so the two sides of an equivalence test start from identical weights.
+    Seeded so both sides of a comparison start from identical weights.
     """
     torch.manual_seed(0)
     model, optimiser, real_data, cfg, eval_batches = harness(
@@ -327,18 +324,18 @@ def one_step(harness, *overrides):
 
 
 def test_accumulated_gradient_equals_the_full_batch(harness):
-    """The claim the whole feature rests on: dividing each micro-loss by the
-    number of micro-batches makes the accumulated gradient the full batch's.
+    """The main check: dividing each micro-batch loss by the number of
+    micro-batches makes the accumulated gradient equal to the full batch's.
 
-    Off by a factor of `accum_steps` if the scaling is dropped, so a tight
-    tolerance here is the point — this would not fail by a little."""
+    Without the scaling it's off by a factor of `accum_steps`, so a tight
+    tolerance is fine here; it wouldn't fail by a small amount."""
     whole, _, _ = one_step(harness)
     split, _, _ = one_step(harness, "train.micro_batch_size=2")
     assert torch.allclose(whole[0], split[0], atol=1e-6)
 
 
 def test_a_single_micro_batch_is_the_unaccumulated_path(harness):
-    """micro == batch is accum_steps of 1, i.e. exactly what ran before."""
+    """micro == batch means accum_steps of 1, i.e. the same as no accumulation."""
     whole, _, _ = one_step(harness)
     same, _, _ = one_step(harness, "train.micro_batch_size=4")
     assert torch.equal(whole[0], same[0])
@@ -346,22 +343,22 @@ def test_a_single_micro_batch_is_the_unaccumulated_path(harness):
 
 def test_one_optimiser_step_per_training_step_whatever_the_accumulation(harness):
     """Accumulation splits the forward/backward, not the update. Stepping per
-    micro-batch would quietly train at 4x the intended batch count."""
+    micro-batch would quietly do 4x as many updates as intended."""
     grads, data, _ = one_step(harness, "train.micro_batch_size=1")
     assert len(grads) == 1
     assert data.requests == [1, 1, 1, 1]
 
 
 def test_no_micro_batch_size_asks_for_the_whole_batch_once(harness):
-    """Every run recorded before this field has to keep its numerics, and the
-    default has to cost nothing — one request, at the full batch size."""
+    """Runs from before this field existed have to train exactly as they did,
+    with one batch request per step at the full batch size."""
     _, data, _ = one_step(harness)
     assert data.requests == [4]
 
 
 def test_batch_loss_still_means_the_mean_over_the_full_batch(harness):
-    """The metric has to be comparable across the field, or every run before it
-    falls out of the same plot."""
+    """batch_loss has to mean the same thing with or without accumulation, so
+    old and new runs can go on the same plot."""
     _, _, whole = one_step(harness)
     _, _, split = one_step(harness, "train.micro_batch_size=2")
     loss_of = lambda log: [
@@ -371,15 +368,15 @@ def test_batch_loss_still_means_the_mean_over_the_full_batch(harness):
 
 
 def test_clipping_sees_the_whole_batch_gradient(harness):
-    """Clipping stays after the accumulation. Clipping each micro-batch's share
-    would be a different and much stronger rule wearing the same config key."""
+    """Clipping happens after accumulation. Clipping each micro-batch
+    separately would be a different, much stronger rule under the same key."""
     grads, _, _ = one_step(harness, "train.micro_batch_size=2", "train.grad_clip=0.01")
     assert grads[0].norm().item() == pytest.approx(0.01, rel=1e-4)
 
 
 def test_accumulation_runs_every_step_not_just_the_first(harness):
-    """`zero_grad` moved to the top of the step; if it had stayed between
-    forward and backward, step 2 onwards would accumulate into step 1's."""
+    """`zero_grad` is at the top of the step. If it were missing, step 2
+    onwards would add to step 1's gradients."""
     torch.manual_seed(0)
     model, optimiser, real_data, cfg, eval_batches = harness(
         "train.max_iters=3", "train.micro_batch_size=2"
@@ -404,8 +401,8 @@ def test_accumulation_runs_every_step_not_just_the_first(harness):
 def test_a_micro_batch_that_cannot_divide_the_batch_is_rejected_at_load(
     harness, override, message
 ):
-    """Fail next to the config that said it, not at step 0 of a run that has
-    already opened a run directory."""
+    """Fail when the config is loaded, not at step 0 of a run that has already
+    created a run directory."""
     with pytest.raises(ValueError, match=message):
         harness(override)
 
@@ -413,7 +410,7 @@ def test_a_micro_batch_that_cannot_divide_the_batch_is_rejected_at_load(
 # ---- edges ----------------------------------------------------------------
 
 def test_zero_iters_reports_minus_one_not_zero(harness):
-    """`final_step = -1` is the honest answer; a checkpoint reads it."""
+    """`final_step = -1` when nothing ran; the checkpoint records it."""
     result, logger, on_eval, _ = run_loop(harness, "train.max_iters=0")
     assert result == {"final_step": -1, "steps_completed": 0}
     assert on_eval.calls == []
@@ -426,13 +423,13 @@ def test_result_counts_the_steps_it_ran(harness):
 
 
 def test_model_is_left_in_train_mode(harness):
-    """evaluate() flips to eval and must flip back, or dropout silently stops."""
+    """evaluate() switches to eval mode and must switch back, or dropout silently stops."""
     _, _, _, model = run_loop(harness, "train.max_iters=4", "train.eval_interval=2")
     assert model.training
 
 
 def test_evaluate_does_not_build_a_graph(harness):
-    """@torch.no_grad on evaluate: without it, eval leaks memory into the run."""
+    """@torch.no_grad on evaluate: without it, eval builds graphs and wastes memory."""
     model, _, _, _, eval_batches = harness()
     before = model.emb.weight.grad
     evaluate(model, eval_batches["val"])
@@ -448,22 +445,21 @@ def test_evaluate_averages_over_the_batches_it_is_given(harness):
 
 # ---- data parallelism ------------------------------------------------------
 #
-# The loop's whole share of it: suppress DDP's all-reduce on every micro-batch
-# but the last, and let the caller reduce the logged loss. Both are duck-typed,
-# so a fake with the right attribute and a plain tensor function are complete
-# implementations — which is the same claim `StubModel` makes about the model.
+# The loop only does two things for DDP: skip the all-reduce on every
+# micro-batch except the last, and let the caller reduce the logged loss. Both
+# are duck-typed, so a fake with the right attribute and a plain tensor function
+# are enough to test them, the same way `StubModel` is enough for the model.
 
 class SyncSpyModel(StubModel):
-    """A model that looks enough like DDP to answer whether the loop drives it.
+    """A model that looks enough like DDP to check how the loop uses it.
 
-    Records `require_backward_grad_sync` as each forward pass sees it, which is
-    the moment that matters: DDP reads the flag in `forward()` to decide whether
-    to prepare its reducer, so a loop that set it after the forward would be
-    setting it too late and this would catch that.
+    Records `require_backward_grad_sync` as each forward pass sees it. That's
+    when it matters: DDP reads the flag in `forward()` to decide whether to
+    prepare its reducer, so if the loop set it after the forward, this would
+    catch it.
 
-    Guarded on `is_grad_enabled` for the same reason DDP's own check is —
-    `evaluate()` runs under `no_grad` and its forwards are not part of the
-    question.
+    Only records when grad is enabled, like DDP's own check, since
+    `evaluate()` runs under `no_grad` and its forward passes don't count.
     """
 
     def __init__(self, vocab_size: int):
@@ -478,12 +474,11 @@ class SyncSpyModel(StubModel):
 
 
 def run_with_model(harness, model_cls, *overrides, reduce_loss=None):
-    """`run_loop`, but with a say in the model and the reduction.
+    """`run_loop`, but with control over the model and the reduction.
 
-    Seeded like `one_step`, and for the same reason: the tests below compare two
-    calls against each other, so both the initial weights and the batches drawn
-    off the global RNG have to match on each side. Without it every comparison
-    fails for a reason that has nothing to do with what is being tested.
+    Seeded like `one_step`, for the same reason: the tests below compare two
+    calls, so the initial weights and the batches drawn from the global RNG
+    have to match on both sides.
     """
     torch.manual_seed(0)
     _, optimiser, data, cfg, eval_batches = harness(*overrides)
@@ -498,9 +493,9 @@ def run_with_model(harness, model_cls, *overrides, reduce_loss=None):
 
 
 def test_only_the_last_micro_batch_of_a_step_syncs_gradients(harness):
-    """The point of the whole mechanism. Without it DDP all-reduces on every
-    micro-batch, so accum_steps=8 pays eight gradient exchanges per optimiser
-    step instead of one — identical arithmetic, eight times the network."""
+    """This is the point of the flag. Without it DDP all-reduces on every
+    micro-batch, so accum_steps=8 means eight gradient exchanges per optimiser
+    step instead of one: same result, eight times the network traffic."""
     model, _ = run_with_model(
         harness, SyncSpyModel, "train.max_iters=1", "train.micro_batch_size=2"
     )
@@ -508,9 +503,9 @@ def test_only_the_last_micro_batch_of_a_step_syncs_gradients(harness):
 
 
 def test_every_step_ends_with_a_sync(harness):
-    """Per step, not once per run. A flag left False after the first step would
-    leave every later step's gradient un-reduced and each rank drifting into its
-    own model, which no loss curve would show."""
+    """Every step, not just once per run. If the flag were left False after the
+    first step, later gradients would never be reduced and each rank would
+    drift into its own model, which the loss curve wouldn't show."""
     model, _ = run_with_model(
         harness, SyncSpyModel, "train.max_iters=3", "train.micro_batch_size=2"
     )
@@ -526,9 +521,8 @@ def test_without_accumulation_every_backward_syncs(harness):
 
 
 def test_a_model_without_the_flag_is_left_alone(harness):
-    """The single-process path. The loop must not grow the attribute on a plain
-    module — a stray `require_backward_grad_sync` on an undistributed model is
-    a lie that the next reader has to disprove."""
+    """The single-process case. The loop mustn't add the attribute to a plain
+    module, where it would be misleading."""
     model, _ = run_with_model(
         harness, StubModel, "train.max_iters=1", "train.micro_batch_size=2"
     )
@@ -536,8 +530,8 @@ def test_a_model_without_the_flag_is_left_alone(harness):
 
 
 def test_reduce_loss_is_applied_to_the_logged_batch_loss(harness):
-    """Under DDP the model saw one rank's share, so the raw number is that
-    share's mean rather than the step's."""
+    """Under DDP each model only sees its rank's share, so the raw loss is that
+    share's mean rather than the whole step's."""
     plain, logger = run_with_model(harness, StubModel, "train.max_iters=1")
     _, doubled = run_with_model(
         harness, StubModel, "train.max_iters=1", reduce_loss=lambda t: t * 2
@@ -549,7 +543,7 @@ def test_reduce_loss_is_applied_to_the_logged_batch_loss(harness):
 
 
 def test_no_reducer_logs_the_loss_unchanged(harness):
-    """The default, and what every caller written before this parameter gets."""
+    """The default, for callers that don't pass a reducer."""
     _, logger = run_with_model(harness, StubModel, "train.max_iters=1")
     _, identity = run_with_model(
         harness, StubModel, "train.max_iters=1", reduce_loss=lambda t: t
@@ -561,9 +555,9 @@ def test_no_reducer_logs_the_loss_unchanged(harness):
 
 
 def test_reducing_does_not_disturb_training(harness):
-    """The reduction is for the metric only. If it mutated the accumulator in
-    place, or worse the graph, the weights would diverge from the unreduced run
-    and the logged number would have changed what it was reporting on."""
+    """The reduction only affects the logged metric. If it changed the
+    accumulated loss in place, or the graph, training itself would differ from
+    a run without it."""
     plain, _ = run_with_model(harness, StubModel, "train.max_iters=2")
     scaled, _ = run_with_model(
         harness, StubModel, "train.max_iters=2", reduce_loss=lambda t: t * 100

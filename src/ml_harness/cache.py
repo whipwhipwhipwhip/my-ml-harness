@@ -1,23 +1,22 @@
 """Content-addressed cache for an encoded corpus.
 
-Encoding is a pure function of (corpus bytes, tokenizer), and both of those
-already have a sha256 by the time a run starts — so the cache key is just those
-two hashes and there is no invalidation logic to get wrong. A different corpus or
-a different tokenizer is a different filename; nothing is ever overwritten with
-something it isn't.
+Encoding only depends on the corpus bytes and the tokenizer, and both already
+have a sha256 by the time a run starts. So the cache key is just those two
+hashes, and there's no invalidation logic to get wrong: a different corpus or
+tokenizer gives a different filename.
 
-Torch-free, like `store.py`, and for the same reason: the tokens are integers,
-and turning them into a tensor is the caller's business.
+Torch-free, like `store.py`: the tokens are just integers, and turning them into
+a tensor is up to the caller.
 
-**The one hole**, and why the key carries two version components: the hashes
+**The one gap**, and why the key also has two version numbers: the hashes
 describe the *inputs* to encoding, not the code that does it. Fix a bug in
-`apply_merges` and every cached file is silently stale, because the corpus and
-the tokenizer recipe are unchanged.
+`apply_merges` and every cached file is silently out of date, because the corpus
+and the tokenizer recipe haven't changed.
 
-Since `tokenizers` became its own distribution that code lives in another repo
-entirely, so the hole is covered from both sides: `_ENCODER_VERSION` tracks
-their changes automatically, and `CACHE_VERSION` is bumped by hand for ours.
-Forgetting the second is still the failure mode to watch for.
+The encoding code lives in the separate `tokenizers` package, so
+`_ENCODER_VERSION` picks up its changes automatically, and `CACHE_VERSION` is
+bumped by hand for changes in this repo. Forgetting to bump it is still the
+thing to watch out for.
 """
 
 from __future__ import annotations
@@ -39,16 +38,13 @@ CACHE_VERSION = 2
 def _encoder_version() -> str:
     """The version of the package that actually does the encoding.
 
-    Read once at import: it can't change while the process runs, and a
-    `PackageNotFoundError` per cache lookup would be a silly price for a
-    constant. "unknown" rather than None so the key stays a readable filename
-    in a source checkout with nothing installed — a *stable* wrong answer,
-    which is the same bargain `CACHE_VERSION` makes.
+    Read once at import, since it can't change while the process is running.
+    "unknown" rather than None if nothing is installed, so the key is still a
+    readable filename and at least stays the same between runs.
 
-    Weak in one place worth naming: two commits of `tokenizers` under the same
-    declared version are indistinguishable here. The lockfile pins the commit,
-    this only sees the version string. That's a narrower hole than the one it
-    closes, not the absence of one.
+    One weakness: two commits of `tokenizers` with the same version number look
+    the same here. The lockfile pins the commit, but this only sees the version
+    string. It's a smaller gap than the one it closes, but still a gap.
     """
     try:
         return version("tokenizers")
@@ -58,22 +54,22 @@ def _encoder_version() -> str:
 
 _ENCODER_VERSION = _encoder_version()
 
-# int32 rather than int64: the largest vocabulary in the project is cl100k's
-# 100256, so half the file for no loss. Torch wants int64 for embedding indices,
-# which is the caller's cast.
+# int32 rather than int64: the largest vocabulary used is cl100k's (~100k), so
+# this halves the file size for free. Torch wants int64 for embedding indices,
+# so the caller converts.
 DTYPE = np.int32
 
-# Enough hex to make a collision irrelevant on a local disk, short enough that
-# `ls` is readable. The full hashes go in the sidecar.
+# Enough hex characters that a collision won't happen on a local disk, but short
+# enough that `ls` is readable. The full hashes go in the sidecar file.
 _KEY_CHARS = 16
 
 
 def cache_path(cache_dir: Path | str, data_sha256: str, tokenizer_sha256: str) -> Path:
-    # Both versions read as globals at call time, not closed over, so a test can
-    # monkeypatch either and see the key move.
+    # Both versions are read as globals at call time, so a test can
+    # monkeypatch either one and see the key change.
     #
-    # No sanitising: PEP 440 restricts a version to `[0-9a-z.!+-]`, all of which
-    # are legal in a filename on every platform this runs on.
+    # No sanitising needed: PEP 440 restricts versions to `[0-9a-z.!+-]`, which
+    # are all fine in filenames.
     return Path(cache_dir) / (
         f"v{CACHE_VERSION}-{_ENCODER_VERSION}"
         f"_{data_sha256[:_KEY_CHARS]}"
@@ -84,9 +80,10 @@ def cache_path(cache_dir: Path | str, data_sha256: str, tokenizer_sha256: str) -
 def load_tokens(path: Path) -> np.ndarray | None:
     """The cached ids, or None on a miss.
 
-    Any failure is a miss rather than an exception: a cache that can crash a run
-    is worse than no cache, and the file a killed process left half-written is
-    exactly the case this has to survive. The caller re-encodes and overwrites.
+    Any failure counts as a miss rather than an exception, since a cache that
+    can crash a run is worse than no cache. In particular, this has to cope with
+    a half-written file left by a killed process. The caller just re-encodes
+    and overwrites it.
     """
     try:
         return np.load(path)
@@ -97,19 +94,19 @@ def load_tokens(path: Path) -> np.ndarray | None:
 def save_tokens(path: Path, tokens: Sequence[int], meta: dict) -> None:
     """Write the ids, plus a sidecar saying what they are.
 
-    Written through a temp file and `os.replace` (the `_safe_write` pattern, for
-    binary) so a run killed mid-write leaves either the old file or the new one,
-    never half of either.
+    Written via a temp file and `os.replace` (like `_safe_write`, but binary),
+    so a run killed mid-write leaves either the old file or the new one, never
+    half of one.
 
-    The sidecar earns its keep the first time someone looks at a directory of
-    hash-named `.npy` files and needs to know which corpus and which tokenizer
-    they came from. Nothing reads it back — `load_tokens` trusts the key.
+    The sidecar is for when you look at a directory of hash-named `.npy` files
+    and want to know which corpus and tokenizer they came from. Nothing reads it
+    back; `load_tokens` relies on the key.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
 
     tmp = path.with_suffix(".tmp")
-    # Through an open file rather than a path: np.save silently appends `.npy`
-    # to a filename that lacks it, and would write somewhere other than `tmp`.
+    # Pass an open file rather than a path: np.save silently adds `.npy` to a
+    # filename without it, so it would write somewhere other than `tmp`.
     with open(tmp, "wb") as handle:
         np.save(handle, np.asarray(tokens, dtype=DTYPE), allow_pickle=False)
     os.replace(tmp, path)

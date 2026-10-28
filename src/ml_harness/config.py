@@ -8,40 +8,39 @@ class OptimiserConfig:
 
 @dataclass(frozen=True)
 class AdamWConfig(OptimiserConfig):
-    """ Two scalars rather than torch's `betas` tuple, so each is addressable on
-    its own: a sweep axis is a dotted `--set optim.beta2=0.95`, and one element
-    of a list isn't reachable that way. registry._build_adamw pairs them back up.
+    """ AdamW's betas, as two scalars rather than torch's `betas` tuple.
 
-    Defaulted to torch's own values, so an `optim` block that names only `lr`
-    still loads — which every config and every already-recorded run does. """
+    Splitting them means each can be set on its own, e.g. as a sweep axis with
+    `--set optim.beta2=0.95`, which you can't do with one element of a list.
+    `registry._build_adamw` puts them back into a tuple.
+
+    The defaults are torch's, so an `optim` block with only `lr` in it still
+    loads (and every existing config and recorded run is like that). """
 
     beta1: float = 0.9
     beta2: float = 0.999
-    # GPT-2's rule, applied in registry.decay_param_groups: this is the decay
-    # for tensors of dim >= 2 — weight matrices and embeddings — and biases and
-    # LayerNorm gains get 0.0. The dimension is a proxy for the distinction that
-    # matters: a matrix maps between spaces and shrinking it is regularisation,
-    # while a bias or a gain is a per-unit offset that decay just drags toward
-    # an arbitrary zero.
+    # GPT-2's rule, applied in registry.decay_param_groups: tensors with dim >= 2
+    # (weight matrices and embeddings) get this decay, and biases and LayerNorm
+    # gains get 0.0. Shrinking a matrix is regularisation, but a bias or gain is
+    # just a per-unit offset, and decay would only pull it towards zero for no
+    # reason. Dimension is a simple way to tell the two apart.
     #
-    # 0.1 is the GPT-2/nanoGPT value. It is *not* what runs recorded before this
-    # field trained under: `_build_adamw` didn't pass `weight_decay` at all, so
-    # torch's AdamW default of 0.01 applied to every parameter, biases included.
-    # Those configs still load, but they no longer reproduce their original run
-    # — and no default could preserve that, since the grouping changes the
-    # numerics on its own.
+    # 0.1 is the GPT-2/nanoGPT value. Runs recorded before this field existed
+    # didn't train with it: `_build_adamw` didn't pass `weight_decay`, so torch's
+    # default of 0.01 was applied to every parameter, biases included. Those
+    # configs still load but won't reproduce the original run, and no default
+    # could fix that, since the grouping alone changes the numerics.
     #
-    # On AdamWConfig rather than the OptimiserConfig base for the same reason
-    # train.grad_clip isn't on it: the base carries what every optimiser has.
-    # There is a mechanical reason too — `_adapt` builds a torch optimiser as
-    # `optim_cls(params, **asdict(cfg))`, so a base-level field would silently
-    # become a flat, ungrouped `weight_decay=` kwarg for every optimiser built
-    # that way, and one optimiser would group where the rest didn't.
+    # It's on AdamWConfig rather than the OptimiserConfig base for the same
+    # reason train.grad_clip isn't: the base only has what every optimiser has.
+    # Also, `_adapt` builds optimisers as `optim_cls(params, **asdict(cfg))`, so
+    # a field on the base would be passed as a flat, ungrouped `weight_decay=`
+    # to every optimiser built that way.
     weight_decay: float = 0.1
 
     def __post_init__(self):
-        # Negative decay is anti-regularisation: it grows the weights every
-        # step, and the run diverges slowly enough to look like a bad lr.
+        # Negative decay grows the weights every step, and the run diverges
+        # slowly enough that it looks like a bad lr.
         if self.weight_decay < 0:
             raise ValueError(
                 f"weight_decay must be >= 0, got {self.weight_decay}"
@@ -49,58 +48,56 @@ class AdamWConfig(OptimiserConfig):
 
 @dataclass(frozen=True)
 class ScheduleConfig:
-    """ blank learning-rate schedule config.
+    """ Empty base for learning-rate schedule configs.
 
-    Fourth use of the discriminator pattern: `schedule_arch` names which subclass
-    the `schedule` block parses into. Empty, like ModelConfig — "hold lr fixed"
-    and "warm up then cosine to a floor" share no parameter.
+    `schedule_arch` says which subclass the `schedule` block is parsed into,
+    the same way `arch` does for `model`. It's empty for the same reason
+    ModelConfig is: "hold lr fixed" and "warm up then cosine to a floor" don't
+    share any parameters.
 
-    None of these carry the learning rate itself. `optim.lr` is the *peak*, the
-    optimiser is still built with it, and a schedule only says how the lr moves
-    relative to that. Two places naming a learning rate would be one too many.
+    None of these hold the learning rate itself. `optim.lr` is the *peak*, the
+    optimiser is built with it, and a schedule only says how the lr moves
+    relative to it. That way the learning rate is only set in one place.
     """
 
 @dataclass(frozen=True)
 class ConstantScheduleConfig(ScheduleConfig):
     """Hold `optim.lr` for the whole run. Nothing to configure.
 
-    The default, and what every run before schedules existed did.
+    This is the default, and it's what every run did before schedules existed.
     """
 
 @dataclass(frozen=True)
 class CosineScheduleConfig(ScheduleConfig):
-    """Linear warmup, cosine decay to a floor, then flat — the GPT-3 schedule.
+    """Linear warmup, cosine decay to a floor, then flat (the GPT-3 schedule).
 
-    Measured in steps rather than tokens. The paper's schedule is in tokens
-    because its batch size changes during the run; ours doesn't, so steps and
-    tokens differ by a constant and the distinction buys nothing.
+    Measured in steps rather than tokens. The paper uses tokens because its
+    batch size changes during the run. Ours doesn't, so steps and tokens differ
+    by a constant factor and it makes no difference.
 
-    Every field is defaulted, so `--set schedule_arch=cosine` alone is a
-    complete, valid schedule: no warmup, decaying over the whole run to 10% of
-    peak.
+    Every field has a default, so `--set schedule_arch=cosine` on its own is a
+    valid schedule: no warmup, decaying over the whole run to 10% of peak.
     """
 
-    # Steps of linear ramp from ~0 up to peak. The ramp exists because Adam's
-    # second-moment estimate is nonsense for the first few dozen steps — it's
-    # averaging over almost no history, so early updates are both large and
-    # badly scaled, at exactly the moment the weights are least able to absorb
-    # them.
+    # Number of steps to ramp linearly from ~0 up to the peak. Adam's
+    # second-moment estimate is unreliable for the first few dozen steps (it's
+    # averaging over almost no history), so early updates can be large and
+    # badly scaled, right when the weights can least handle it.
     warmup_steps: int = 0
     # The step at which the cosine reaches the floor, counted from step 0 with
-    # the warmup *included* (nanoGPT's `lr_decay_iters`, so the numbers port).
-    # None = train.max_iters, i.e. "decay across the whole run" — which is what
-    # you usually want, and which keeps the schedule's shape when max_iters
-    # becomes a sweep axis. An explicit value is for the case that isn't:
-    # decaying to the floor early and holding there.
+    # the warmup included (like nanoGPT's `lr_decay_iters`, so numbers carry
+    # over). None means train.max_iters, i.e. decay over the whole run. That's
+    # usually what you want, and it keeps the schedule's shape when max_iters
+    # is swept. Set it explicitly to reach the floor early and stay there.
     decay_steps: int | None = None
-    # The floor, as a fraction of peak. A fraction rather than an absolute lr so
-    # the shape is scale-invariant: `--set optim.lr=1e-3` moves peak and floor
-    # together instead of quietly changing the decay ratio, and no lr can put
-    # the floor above the peak and turn this into a ramp.
+    # The floor, as a fraction of the peak. A fraction rather than an absolute
+    # lr so that `--set optim.lr=1e-3` moves the peak and floor together
+    # instead of changing the decay ratio, and so the floor can never end up
+    # above the peak.
     #
-    # It bounds the *decay*, not the whole run: warmup ramps from ~0 and so
-    # passes below the floor on its way up. Clamping the warmup to the floor
-    # would start it at 10% of peak, which is most of the way to no warmup.
+    # It only bounds the decay. Warmup starts from ~0, so it passes below the
+    # floor on the way up. Starting warmup at the floor would mean starting at
+    # 10% of peak, which is barely a warmup at all.
     min_lr_frac: float = 0.1
 
     def __post_init__(self):
@@ -111,10 +108,10 @@ class CosineScheduleConfig(ScheduleConfig):
                 f"min_lr_frac is a fraction of optim.lr and must be in [0, 1], "
                 f"got {self.min_lr_frac}"
             )
-        # Only checkable when decay_steps is stated. The None case resolves
-        # against train.max_iters at build time and can land below warmup
-        # legitimately — a smoke run is 4 iters — so the schedule function
-        # guards that rather than raising on it.
+        # Can only check this when decay_steps is given. When it's None it
+        # becomes train.max_iters at build time, which can legitimately be
+        # below the warmup (a smoke run is 4 iters), so the schedule function
+        # handles that case instead of raising.
         if self.decay_steps is not None and self.decay_steps <= self.warmup_steps:
             raise ValueError(
                 f"decay_steps ({self.decay_steps}) must be greater than "
@@ -130,71 +127,66 @@ class TrainConfig:
     batch_size: int
     eval_interval: int
     eval_iters: int
-    # What generation is seeded with at each eval. Encoded through the run's own
-    # tokenizer, so it has to be text rather than an id: id 0 is '\n' under a
-    # character vocabulary and byte 0x00 under BPE, and only one of those is a
-    # sensible thing to continue from. Default newline = "start of a line",
-    # which is the character tokenizer's old hardcoded behaviour.
+    # The prompt generation starts from at each eval. It's text rather than an
+    # id because it goes through the run's own tokenizer: id 0 is '\n' for a
+    # character vocabulary but byte 0x00 for BPE. The default newline means
+    # "start of a line", which is what the character tokenizer used to hardcode.
     sample_prompt: str = "\n"
-    # Truncate sampling to the k likeliest tokens. A decoding knob, not an
-    # architectural one, which is why it lives here and not on a ModelConfig —
-    # it changes what a checkpoint writes into samples/, never what it learned.
-    # None = sample the full distribution, the behaviour every existing run has.
-    # Calibrated for a large vocabulary: HuggingFace's library-wide default is
-    # 50, against GPT-2's 50257. Under a char tokenizer (~65 ids) it barely
-    # bites, so a run that sets it wants a BPE tokenizer to mean much by it.
+    # Only sample from the k most likely tokens. This is a decoding setting, not
+    # part of the architecture, so it lives here rather than on a ModelConfig:
+    # it changes what gets written to samples/, never what the model learns.
+    # None samples from the full distribution (what every existing run does).
+    # Values are usually picked for big vocabularies (HuggingFace defaults to
+    # 50, against GPT-2's 50257); with a char tokenizer (~65 ids) it does very
+    # little.
     top_k: int | None = None
-    # Whether each eval writes a generation to samples/. On for a single run —
-    # for a character-level LM the samples are the qualitative signal and
-    # they're nearly free. Off for a sweep, where 200 generations across 50
-    # configs is noise, and where generation is a real fraction of a short run's
-    # wall time. A config field rather than a parameter on `run()` so a sweep
-    # sets it through the same validated override path as everything else.
+    # Whether each eval writes a generated sample to samples/. On for a single
+    # run, since for a character-level LM the samples are the main qualitative
+    # signal and they're nearly free. Turn it off for sweeps, where hundreds of
+    # samples are just noise and generation is a real fraction of a short run's
+    # time. It's a config field rather than an argument to `run()` so a sweep
+    # can set it through the usual override path.
     write_samples: bool = True
-    # Max global L2 norm of the gradient, rescaled down when it exceeds this.
-    # None = no clipping, which is what every run before this field did.
+    # Maximum global L2 norm of the gradient; if it's larger, the gradient is
+    # scaled down to this. None means no clipping (what every run before this
+    # field did).
     #
-    # On TrainConfig rather than OptimiserConfig because clipping isn't an
-    # optimiser's business: it happens between backward and step, applies
-    # identically whichever optimiser runs next, and is the loop that does it.
-    # Putting it on the base OptimiserConfig would say every optimiser has a
-    # clipping rule, which is not what the code does.
+    # This is on TrainConfig rather than OptimiserConfig because clipping isn't
+    # part of the optimiser: the loop does it between backward and step, and it
+    # works the same whatever optimiser comes next.
     #
-    # A single bad batch can produce a gradient orders of magnitude larger than
-    # the typical one; unclipped, Adam's moment estimates carry that spike for
+    # One bad batch can produce a gradient orders of magnitude bigger than
+    # usual, and without clipping Adam's moment estimates carry that spike for
     # thousands of steps. 1.0 is the nanoGPT/GPT-3 value.
     grad_clip: float | None = None
-    # Sequences per forward/backward pass, when that has to be smaller than the
-    # batch the update is computed from. `batch_size` keeps exactly one meaning
-    # — sequences per optimiser step — and this says how many of them fit in
-    # memory at once; the loop runs `batch_size // micro_batch_size` backward
-    # passes before each step, scaling each loss so the accumulated gradient
-    # equals the full batch's.
+    # Sequences per forward/backward pass, for when the full batch doesn't fit
+    # in memory. `batch_size` always means sequences per optimiser step; this
+    # says how many fit at once. The loop runs `batch_size // micro_batch_size`
+    # backward passes before each step, scaling each loss so the accumulated
+    # gradient is the same as the full batch's.
     #
-    # None = no accumulation, which is what every run before this field did.
-    # Spelled this way round rather than as an accumulation count (nanoGPT's
-    # `grad_accum_steps`, where `batch_size` becomes the micro batch) because
-    # that would silently redefine `batch_size` across already-recorded runs,
-    # and leave the batch a run actually trained on as a product of two fields.
+    # None means no accumulation (what every run before this field did). It's
+    # set this way round, rather than as an accumulation count like nanoGPT's
+    # `grad_accum_steps` (where `batch_size` becomes the micro batch), because
+    # that would change what `batch_size` means for runs already recorded, and
+    # the real batch size would become the product of two fields.
     #
-    # A hardware knob, not an experimental one, which is why it is in
-    # provenance.GROUP_EXCLUDES: splitting a batch to fit a smaller card is the
-    # same experiment. Not the same *run* — the RNG draws a different sequence
-    # of batches and floats accumulate in a different order — which is exactly
-    # the standing `runtime.seed` is held to.
+    # It's a hardware setting rather than an experimental one, so it's in
+    # provenance.GROUP_EXCLUDES: splitting a batch to fit on a smaller card is
+    # the same experiment. It's not exactly the same run (different batches get
+    # drawn, and floats are summed in a different order), but that's the same
+    # situation as changing `runtime.seed`.
     micro_batch_size: int | None = None
 
     def __post_init__(self):
-        # 0.0 would zero every gradient and train nothing, silently — the run
-        # would look healthy and the loss would sit flat. Fail next to the
-        # config that said it.
+        # 0.0 would zero every gradient, and the run would look healthy with a
+        # flat loss. Better to fail here.
         if self.grad_clip is not None and self.grad_clip <= 0:
             raise ValueError(f"grad_clip must be positive, got {self.grad_clip}")
         # Checked here rather than in the loop so a bad value fails before a
-        # model is built, rather than at step 0 of a run that has already
-        # written a run directory. An indivisible split is a config error and
-        # not a rounding question: silently training on batch_size rounded down
-        # to a multiple would make the recorded batch_size a lie.
+        # model is built or a run directory is written. If the batch doesn't
+        # split evenly that's a config error. Quietly rounding batch_size down
+        # would mean the recorded batch_size is wrong.
         if self.micro_batch_size is not None:
             if self.micro_batch_size <= 0:
                 raise ValueError(
@@ -215,31 +207,29 @@ class TrainConfig:
 
 @dataclass(frozen=True)
 class DataConfig:
-    """ blank Data config.
+    """ Empty base for dataset configs.
 
-    Third use of the discriminator pattern: `data_arch` names which subclass the
-    `data` block parses into. Empty for a reason — there is no field every
-    dataset has. `cache` is meaningless for a corpus that's generated rather than
-    read, `n_problems` is meaningless for a file, and even `split_frac` belongs
-    to the subclasses, because how a dataset divides is a property of what it's
-    made of.
+    `data_arch` says which subclass the `data` block is parsed into. It's empty
+    because no field applies to every dataset: `cache` means nothing for a
+    generated corpus, `n_problems` means nothing for a file, and even
+    `split_frac` depends on what the dataset is.
 
-    Only the generic subclass lives here. A dataset that names a *task* —
-    `gpt_addition`'s AdditionDataConfig — lives with that task, and reaches
-    `load_run_config` through a passed-in DATAS table, the same way GPTConfig
-    reaches it through ARCHES.
+    Only the generic file subclass lives here. A dataset for a specific task
+    (e.g. `gpt_addition`'s AdditionDataConfig) lives with that task and reaches
+    `load_run_config` through a DATAS table passed in by the caller, the same
+    way a model config does through ARCHES.
     """
 
 @dataclass(frozen=True)
 class FileDataConfig(DataConfig):
-    """A text corpus read off disk, split by position."""
+    """A text corpus read from disk, split by position."""
 
     path: str
     split_frac: float
-    # Whether to memoise the encoded corpus on disk. The cache is content
-    # addressed, so this exists for the one case the key can't cover: an encoder
-    # whose *behaviour* changed without its recipe changing. Bumping
-    # CACHE_VERSION is the real fix; this is the switch for bisecting to it.
+    # Whether to cache the encoded corpus on disk. The cache key is a content
+    # hash, so the only time this matters is when the encoder's behaviour
+    # changed without its recipe changing. The real fix for that is bumping
+    # CACHE_VERSION; this switch is for tracking such a bug down.
     cache: bool = True
 
 @dataclass(frozen=True)
@@ -250,81 +240,79 @@ class RuntimeConfig:
     eval_seed: int
     device: str
     # How fp32 matmuls are allowed to be computed. "highest" is torch's default
-    # and keeps the full 24-bit mantissa; "high"/"medium" trade mantissa bits for
-    # throughput — on CUDA (Ampere and later) that's TF32 on the tensor cores,
-    # which is where the lecture's speedup comes from. A no-op on MPS and CPU,
-    # measured; kept in the config anyway so a run on a rented GPU is a config
-    # change rather than an edit.
+    # and keeps the full 24-bit mantissa. "high"/"medium" give up some mantissa
+    # bits for speed; on CUDA (Ampere and later) that means TF32 on the tensor
+    # cores, which is where the lecture's speedup comes from. It does nothing on
+    # MPS or CPU (I measured), but it's in the config so moving to a rented GPU
+    # is a config change rather than a code change.
     #
-    # Runtime rather than optim or model: it changes no hyperparameter and no
-    # architecture, only how the same arithmetic is carried out — the same
-    # category as which device the run lands on. It is *not* in GROUP_EXCLUDES,
-    # so two precisions are two experiments: the numerics differ, and averaging
-    # their losses would be averaging different computations.
+    # It's under runtime rather than optim or model because it doesn't change a
+    # hyperparameter or the architecture, just how the same arithmetic is done,
+    # like the choice of device. It's *not* in GROUP_EXCLUDES, so two precisions
+    # are two experiments: the numerics differ, so their losses shouldn't be
+    # averaged together.
     #
-    # Defaulted so every config file written before this field still loads under
-    # dacite's strict=True, and so the default preserves existing numerics.
+    # Has a default so older config files still load with dacite's strict=True,
+    # and so their numerics don't change.
     matmul_precision: str = "highest"
-    # Mixed precision for the forward pass: None (everything in fp32, the
-    # default) or "bf16". Distinct from matmul_precision, which only says how
-    # *fp32* matmuls may be computed internally — this changes the dtype the
-    # activations are actually stored in, so it moves memory as well as flops.
+    # Mixed precision for the forward pass: None (all fp32, the default) or
+    # "bf16". This is different from matmul_precision, which only controls how
+    # fp32 matmuls are computed internally. This one changes the dtype the
+    # activations are stored in, so it saves memory as well as compute.
     #
-    # Weights and gradients stay fp32 either way: autocast casts op inputs, not
-    # parameters, so the optimiser never sees a bf16 tensor. Only bf16 is
-    # accepted; fp16 would need a GradScaler this harness doesn't have.
+    # Weights and gradients stay fp32 either way: autocast casts the inputs to
+    # each op, not the parameters, so the optimiser never sees a bf16 tensor.
+    # Only bf16 is allowed, since fp16 would need a GradScaler, which this
+    # harness doesn't have.
     autocast_dtype: str | None = None
-    # Whether to run the training step through `torch.compile`. Off by default,
-    # and that default is measured rather than cautious: on MPS the inductor
-    # backend currently emits a LayerNorm kernel ~16x slower than the vendor one
-    # eager dispatches to, which for a 9-LayerNorm GPT is a ~37% regression. It's
-    # a large win on CUDA, where the codegen is mature — hence a config field
-    # rather than a decision baked into the entry point.
+    # Whether to run the training step through `torch.compile`. Off by default
+    # based on measurement: on MPS the inductor backend currently produces a
+    # LayerNorm kernel ~16x slower than the one eager mode uses, which made a GPT
+    # with 9 LayerNorms ~37% slower. It's a big win on CUDA, where the codegen is
+    # mature, hence a config field rather than hardcoding it either way.
     compile: bool = False
 
 @dataclass(frozen=True)
 class ModelConfig:
-    """ blank Model config """
+    """ Empty base for model configs """
 
 @dataclass(frozen=True)
 class TokenizerConfig:
-    """ blank Tokenizer config.
+    """ Base for tokenizer configs.
 
-    Same discriminator pattern as ModelConfig: `tokenizer_arch` names which of
-    the subclasses below the `tokenizer` block parses into. Two of them are
-    empty, which is not a mistake — "the alphabet is whatever the corpus
-    contains" and "one id per byte" are complete descriptions.
+    `tokenizer_arch` says which subclass below the `tokenizer` block is parsed
+    into, the same way `arch` does for `model`. Two of the subclasses are empty
+    on purpose: "the alphabet is whatever the corpus contains" and "one id per
+    byte" need no options.
 
-    Not quite empty, though: padding is the one option every tokenizer takes, so
-    it sits here rather than being repeated five times below.
+    Padding is the one option every tokenizer takes, so it's here rather than
+    repeated on each subclass.
     """
 
-    # The absolute `vocab_size` to report, if larger than the real one. Buys
-    # nothing linguistic — the ids it adds are unreachable and their embedding
-    # rows train on nothing — and buys a number that factorises the way a GPU
-    # wants: 50257 is prime-ish and awkward, 50304 is 64 x 786. The tokenizer
-    # owns it rather than the model because `vocab_size` is the single number
-    # the embedding table is built from, so a model that padded privately would
-    # disagree with the tokenizer that named its ids. See
-    # `tokenizers.base.pad_vocab_size`, and note it lands in `to_dict` and
-    # therefore in the fingerprint, which is what keeps a padded run and an
-    # unpadded one out of the same cache entry.
+    # The `vocab_size` to report, if larger than the real one. The extra ids are
+    # never produced and their embedding rows never train. The point is to get a
+    # GPU-friendly size: 50257 is awkward, while 50304 is 64 x 786. The
+    # tokenizer owns this rather than the model because `vocab_size` is what the
+    # embedding table is built from, so if the model padded on its own the two
+    # would disagree. See `tokenizers.base.pad_vocab_size`. It's also saved in
+    # `to_dict` and so in the fingerprint, which keeps padded and unpadded runs
+    # from sharing a cache entry.
     #
-    # `kw_only` so a base-class default doesn't force one onto the required
-    # fields the subclasses add (`alphabet`, `vocab_size`, `encoding`).
+    # `kw_only` so that having a default here doesn't force defaults onto the
+    # required fields the subclasses add (`alphabet`, `vocab_size`, `encoding`).
     pad_vocab_to: int | None = field(default=None, kw_only=True)
 
 @dataclass(frozen=True)
 class CharConfig(TokenizerConfig):
-    """Character-level, alphabet read off the corpus. Nothing to configure."""
+    """Character-level, alphabet taken from the corpus. Nothing to configure."""
 
 @dataclass(frozen=True)
 class CharFixedConfig(TokenizerConfig):
-    """Character-level over a stated alphabet.
+    """Character-level over a given alphabet.
 
-    Worth the second entry rather than a nullable field on CharConfig: the
-    difference is whether the ids depend on the corpus, which is the thing a
-    checkpoint's readability turns on.
+    A separate entry rather than an optional field on CharConfig, because the
+    difference is whether the ids depend on the corpus, and that decides whether
+    a checkpoint can still be decoded once the corpus changes.
     """
 
     alphabet: str
@@ -337,33 +325,33 @@ class ByteConfig(TokenizerConfig):
 class RegexBPEConfig(TokenizerConfig):
     """BPE trained on this run's corpus.
 
-    Note this trains on every run, before stage C's cache exists — fine for a
-    small corpus, minutes for a large one.
+    The tokenizer is retrained on every run (only the encoded corpus is
+    cached). That's fine for a small corpus but takes minutes for a large one.
     """
 
     vocab_size: int
     # None means the tokenizer's own default (the whole text as one chunk).
-    # Kept nullable rather than repeating the pattern string here, so the
-    # default lives in exactly one place.
+    # Left as None rather than copying the pattern here, so the default is only
+    # defined in one place.
     split_pattern: str | None = None
-    # Declared here, numbered directly above the 256 bytes in this order, and
-    # counted against `vocab_size`. Order is the id assignment, so reordering
-    # the list is a different tokenizer, not a different way of writing one.
+    # Given ids directly above the 256 bytes, in this order, and counted towards
+    # `vocab_size`. The order decides the ids, so reordering the list gives a
+    # different tokenizer.
     special_tokens: list[str] | None = None
 
 @dataclass(frozen=True)
 class TiktokenConfig(TokenizerConfig):
-    """BPE over a tiktoken encoding's learned ranks — `gpt2`, `cl100k_base`."""
+    """BPE using a tiktoken encoding's vocabulary, e.g. `gpt2`, `cl100k_base`."""
 
     encoding: str
-    # None means the encoding's own pattern, which is what you want; GPT-2's is
-    # case-sensitive and GPT-4's isn't, and crossing them silently produces
+    # None means the encoding's own pattern, which is what you want. GPT-2's is
+    # case-sensitive and GPT-4's isn't, and mixing them up quietly produces the
     # wrong ids.
     split_pattern: str | None = None
-    # Names from the encoding's own special table, e.g. ["<|endoftext|>"], which
-    # keep the ids OpenAI gave them rather than being appended. Opting in is what
-    # takes GPT-2 from 50256 to 50257: an unused id is an embedding row trained
-    # on nothing, so a run only pays for the specials it will actually emit.
+    # Names from the encoding's own special tokens, e.g. ["<|endoftext|>"].
+    # They keep the ids OpenAI gave them rather than being appended. This is
+    # what takes GPT-2 from 50256 to 50257 ids: an unused id is an embedding row
+    # that never trains, so a run only includes the specials it will use.
     special_tokens: list[str] | None = None
 
 @dataclass(frozen=True)
@@ -380,9 +368,8 @@ class RunConfig:
     data: DataConfig
     runtime: RuntimeConfig
     note: str
-    # Defaulted, and last because of it: every other field is required, and a
-    # default can't precede a non-default. "constant" reproduces the behaviour
-    # of every config written before schedules existed, so no file has to change
-    # and no recorded run's meaning does.
+    # These have defaults, so they have to come last. "constant" is what every
+    # config did before schedules existed, so no existing file has to change
+    # and no recorded run changes meaning.
     schedule_arch: str = "constant"
     schedule: ScheduleConfig = ConstantScheduleConfig()

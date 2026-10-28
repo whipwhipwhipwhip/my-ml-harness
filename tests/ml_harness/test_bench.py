@@ -1,11 +1,10 @@
 """ml_harness/bench.py, driven with the same fakes as the loop.
 
-No filesystem, no GPT, no timing assertions. Wall-clock numbers aren't testable —
-a loaded CI box makes any threshold either flaky or vacuous — so what's asserted
-is the *accounting*: that warmup is excluded, that the arithmetic relating tokens
-to seconds holds, and that the loop still trains. The measurements themselves are
-only as good as the sync, which is tested by asserting it was called, not by
-timing something.
+No filesystem, no GPT, no timing assertions. Wall-clock times can't really be
+tested (any threshold is either flaky or meaningless on a busy machine), so these
+check the *bookkeeping*: that warmup is excluded, that the tokens-per-second
+arithmetic is right, and that the loop still trains. The measurements are only
+as good as the sync, which is tested by checking it gets called.
 """
 
 from __future__ import annotations
@@ -47,7 +46,7 @@ def run_bench(bench_harness, n_iters=3, warmup=2, *overrides):
 # ---- what gets measured ---------------------------------------------------
 
 def test_warmup_iterations_are_excluded_from_the_measurements(bench_harness):
-    """The reason the first iteration doesn't wreck the mean."""
+    """This is why the slow first iteration doesn't skew the mean."""
     result, _, _ = run_bench(bench_harness, n_iters=3, warmup=2)
     assert len(result.batch_s) == 3
     assert len(result.step_s) == 3
@@ -60,7 +59,7 @@ def test_zero_warmup_measures_everything(bench_harness):
 
 
 def test_iter_time_is_batch_plus_step(bench_harness):
-    """Both halves are real wall time; tokens/sec is quoted against the sum."""
+    """Both parts are real time, and tokens/sec uses their sum."""
     result, _, _ = run_bench(bench_harness)
     for total, batch, step in zip(result.iter_s, result.batch_s, result.step_s):
         assert total == pytest.approx(batch + step)
@@ -85,7 +84,7 @@ def test_throughput_is_tokens_over_that_iteration(bench_harness):
 # ---- that it's still a training step --------------------------------------
 
 def test_parameters_change(bench_harness):
-    """Timing a forward pass that never steps would flatter every config equally."""
+    """The benchmark must actually step the optimiser, not just run forward passes."""
     model, optimiser, data, cfg = bench_harness()
     before = model.emb.weight.detach().clone()
     benchmark(model, optimiser, data, cfg, DEVICE, n_iters=3, warmup=1)
@@ -109,7 +108,7 @@ def test_on_iter_sees_every_iteration_and_knows_which_count(bench_harness):
 
 
 def test_syncs_before_and_around_every_iteration(bench_harness, monkeypatch):
-    """Without the sync, an async backend measures enqueue time, not compute."""
+    """Without the sync, an async backend would only measure queueing time."""
     calls = []
     monkeypatch.setattr(
         "ml_harness.bench.make_sync", lambda device: lambda: calls.append(1)
@@ -123,7 +122,7 @@ def test_syncs_before_and_around_every_iteration(bench_harness, monkeypatch):
 # ---- the summary ----------------------------------------------------------
 
 def test_summary_is_json_serialisable_plain_data(bench_harness):
-    """It becomes `--json` output; a tensor or a numpy float in here would raise."""
+    """It's written as `--json` output, so a tensor or numpy float in here would fail."""
     import json
 
     result, _, _ = run_bench(bench_harness)
@@ -138,7 +137,7 @@ def test_summary_stats_are_ordered(bench_harness):
 
 
 def test_aggregate_throughput_matches_total_time(bench_harness):
-    """The one-stopwatch number, which is not the mean of the per-iteration rates."""
+    """Total tokens over total time, which isn't the mean of the per-iteration rates."""
     result, _, _ = run_bench(bench_harness, n_iters=4, warmup=1)
     summary = result.summary()
     assert summary["total_s"] == pytest.approx(sum(result.iter_s))
@@ -148,7 +147,7 @@ def test_aggregate_throughput_matches_total_time(bench_harness):
 
 
 def test_zero_measured_iters_summarises_without_dividing_by_zero(bench_harness):
-    """A warmup-only invocation is a mistake, but not a crash."""
+    """Running only warmup is probably a mistake, but shouldn't crash."""
     result, _, _ = run_bench(bench_harness, n_iters=0, warmup=1)
     summary = result.summary()
     assert summary["iters"] == 0
@@ -157,12 +156,12 @@ def test_zero_measured_iters_summarises_without_dividing_by_zero(bench_harness):
 
 
 def test_cpu_sync_is_a_noop_that_costs_nothing():
-    """CPU is genuinely synchronous — the no-op is correct, not a fallback."""
+    """CPU is already synchronous, so a no-op is correct."""
     assert make_sync(torch.device("cpu"))() is None
 
 
 def test_bench_result_holds_the_raw_series(bench_harness):
-    """Summaries are recomputable from the lists; the reverse isn't true."""
+    """The summary can be recomputed from the lists, but not the other way round."""
     result, _, _ = run_bench(bench_harness, n_iters=3, warmup=1)
     assert isinstance(result, BenchResult)
     assert result.summary()["iter_s"]["n"] == len(result.iter_s) == 3

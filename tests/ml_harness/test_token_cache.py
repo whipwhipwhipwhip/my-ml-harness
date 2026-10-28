@@ -1,12 +1,13 @@
-"""The token cache: does it hit, does it miss safely, and can it ever lie.
+"""The token cache: does it hit, does it miss safely, and can it ever return
+the wrong tokens.
 
-The last question is the important one. A cache that's merely slow is a
-performance bug; a cache that returns the wrong tokens silently trains a model on
-the wrong data and nothing in the run record would say so. So most of this is
-about the key — different corpus, different tokenizer, different version — and
-about failure modes degrading to a miss rather than to wrong answers.
+The last one matters most. A slow cache is a performance bug, but a cache that
+returns the wrong tokens silently trains a model on the wrong data, and nothing
+in the run record would show it. So most of this is about the key (different
+corpus, tokenizer or version) and about failures turning into a miss rather
+than a wrong answer.
 
-Cheap tier: tmp_path and short strings, no GPT, no run directory.
+Cheap tests: tmp_path and short strings, no GPT, no run directory.
 """
 
 from __future__ import annotations
@@ -73,25 +74,25 @@ def test_changing_either_half_changes_the_file(data_sha, tok_sha):
 
 
 def test_the_version_is_in_the_filename(monkeypatch):
-    """The one thing the content hashes can't cover: a change to the encoder
-    itself, which leaves corpus and tokenizer recipe identical."""
+    """What the content hashes can't cover: a change to the encoder itself,
+    with the corpus and tokenizer recipe unchanged."""
     before = cache_path("/c", "d" * 64, "t" * 64)
     monkeypatch.setattr(cache_mod, "CACHE_VERSION", cache_mod.CACHE_VERSION + 1)
     assert cache_path("/c", "d" * 64, "t" * 64) != before
 
 
 def test_the_encoder_version_is_in_the_filename(monkeypatch):
-    """The same hole from the other side. `CACHE_VERSION` is bumped by hand for
-    changes here; `tokenizers` is a separate distribution, so a merge-loop fix
-    lands there with nothing in this repo to notice it."""
+    """The same gap from the other side. `CACHE_VERSION` is bumped by hand for
+    changes here, but `tokenizers` is a separate package, so a fix to its merge
+    loop wouldn't show up in this repo at all."""
     before = cache_path("/c", "d" * 64, "t" * 64)
     monkeypatch.setattr(cache_mod, "_ENCODER_VERSION", "9.9.9")
     assert cache_path("/c", "d" * 64, "t" * 64) != before
 
 
 def test_the_encoder_version_is_a_real_one():
-    """Guards the degenerate pass: if the lookup were broken, every key would
-    carry the same "unknown" and the test above would still pass."""
+    """If the version lookup were broken, every key would say "unknown" and the
+    test above would still pass, so check it separately."""
     assert cache_mod._ENCODER_VERSION != "unknown"
     assert cache_mod._ENCODER_VERSION in cache_path("/c", "d" * 64, "t" * 64).name
 
@@ -109,8 +110,8 @@ def test_a_missing_file_is_a_miss(cache_dir):
 
 
 def test_a_truncated_file_is_a_miss_not_a_crash(cache_dir):
-    """What a run killed mid-write leaves behind. A cache that can crash a run is
-    worse than no cache."""
+    """What a run killed mid-write leaves behind. A cache that can crash a run
+    is worse than no cache."""
     path = cache_path(cache_dir, "a" * 64, "b" * 64)
     save_tokens(path, list(range(1000)), {})
     path.write_bytes(path.read_bytes()[:40])
@@ -150,7 +151,7 @@ def test_the_second_load_does_not_re_encode(corpus, cache_dir):
 
 
 def test_a_cache_hit_produces_the_same_tokens_as_encoding(corpus, cache_dir):
-    """The only thing a cache is allowed to change is how long it takes."""
+    """A cache should only change how long things take."""
     uncached = load_data(corpus, 0.9, CharTokenizer.from_text, None)
     load_data(corpus, 0.9, CharTokenizer.from_text, cache_dir)
     cached = load_data(corpus, 0.9, CharTokenizer.from_text, cache_dir)
@@ -160,7 +161,7 @@ def test_a_cache_hit_produces_the_same_tokens_as_encoding(corpus, cache_dir):
 
 
 def test_two_tokenizers_over_one_corpus_do_not_collide(corpus, cache_dir):
-    """The failure this cache has to be incapable of: byte ids served to a
+    """The thing that must never happen: byte-level ids given to a
     character-level run."""
     char = load_data(corpus, 0.9, CharTokenizer.from_text, cache_dir)
     byte = load_data(corpus, 0.9, lambda text: ByteTokenizer(), cache_dir)

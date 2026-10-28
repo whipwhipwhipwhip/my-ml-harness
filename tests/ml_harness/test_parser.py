@@ -1,14 +1,14 @@
-"""The CLI edge, and the one property that made it worth changing.
+"""Command-line parsing, and in particular that it has no built-in paths.
 
-`parser.py` used to derive `REPO_ROOT` from its own `__file__` and hang the
-config and runs directories off it. That's an assertion about where the file
-sits in a tree, true only for an editable checkout of this repo — installed as a
-dependency it resolves into `site-packages/`, and nothing raises. So the tests
-that matter here are about *absence*: no path constants, and a flag with no
-project-supplied default is `required` rather than quietly wrong.
+`parser.py` used to work out `REPO_ROOT` from its own `__file__` and put the
+config and runs directories under it. That only works for an editable checkout
+of this repo: installed as a dependency it points into `site-packages/`, and
+nothing raises. So the important tests here check that things are *absent*: no
+path constants, and a flag with no project default is `required` rather than
+quietly wrong.
 
-Cheapest possible tier — argparse and a list of strings. No config file, no run
-directory, no project.
+Cheap tests: argparse and a list of strings. No config file, no run directory,
+no project.
 """
 
 from __future__ import annotations
@@ -25,17 +25,17 @@ from ml_harness.parser import parse_args, parse_bench_args, parse_sweep_args
 
 @pytest.mark.parametrize("name", ["REPO_ROOT", "CONFIG_ROOT", "SWEEP_ROOT", "RUNS_ROOT"])
 def test_the_module_exports_no_paths(name):
-    """The regression this change exists to prevent, stated so it can't come back.
+    """The old bug, written as a test so it can't come back.
 
-    Any of these reappearing means someone reintroduced a path derived from
-    `__file__`, which is the bug: it resolves to *a* directory wherever it's
-    installed, just not the caller's.
+    If any of these reappear, someone has reintroduced a path based on
+    `__file__`, which points at *a* directory wherever it's installed, just not
+    the caller's.
     """
     assert not hasattr(parser_mod, name)
 
 
 def test_the_module_does_not_touch_the_filesystem():
-    """`parents[...]` is the specific shape of the old bug."""
+    """`parents[...]` is exactly what the old bug looked like."""
     source = Path(parser_mod.__file__).read_text()
     code = "\n".join(
         line for line in source.splitlines() if not line.lstrip().startswith("#")
@@ -76,8 +76,8 @@ def test_an_explicit_flag_beats_the_project_default():
 
 
 def test_defaults_come_back_as_paths_not_strings():
-    """`run()` does `Path(runs_root) / ...`; a str default that never became a
-    Path would still work there and hide the inconsistency until it didn't."""
+    """`run()` does `Path(runs_root) / ...`, so a str default would still work
+    there and hide the inconsistency until something else used it."""
     args = parse_args(config_default="/c.json", runs_root_default="/runs", argv=[])
     assert isinstance(args.config, Path) and isinstance(args.runs_root, Path)
 
@@ -85,8 +85,8 @@ def test_defaults_come_back_as_paths_not_strings():
 # ---- --set accumulates, in order ------------------------------------------
 
 def test_set_repeats_in_order():
-    """Order is load-bearing: `apply_overrides` applies left to right, which is
-    what makes `--smoke --set train.max_iters=50` a longer smoke run."""
+    """Order matters: `apply_overrides` applies left to right, which is what
+    makes `--smoke --set train.max_iters=50` a longer smoke run."""
     args = parse_args(
         config_default="/c.json",
         runs_root_default="/runs",
@@ -109,8 +109,8 @@ def test_bench_has_its_own_knobs_and_no_runs_root():
 
 
 def test_sweep_config_stays_optional_with_no_default():
-    """The deliberate exception: absent means "use the base the sweep file
-    names", not "the project forgot to say"."""
+    """The exception: leaving it out means "use the sweep file's base
+    config"."""
     args = parse_sweep_args(runs_root_default="/runs", argv=["--sweep", "/s.json"])
     assert args.config is None
     assert args.sweep == Path("/s.json")

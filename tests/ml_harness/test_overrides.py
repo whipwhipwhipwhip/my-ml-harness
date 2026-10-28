@@ -1,12 +1,12 @@
 """`--set` handling: the raw-dict rewrite in ml_harness/registry.py.
 
-Two layers, tested separately:
-  * apply_overrides on its own — the errors it raises itself, and the value parsing
-  * through load_run_config — the errors dacite raises because the rewrite went
-    through the dict rather than the built object
+Tested at two levels:
+  * apply_overrides on its own: the errors it raises itself, and value parsing
+  * through load_run_config: the errors dacite raises, because overrides change
+    the dict rather than the built object
 
-The second layer is the point of doing it before dacite rather than after, so it
-gets tests rather than a comment.
+The second is the reason overrides are applied before dacite, so it gets its own
+tests.
 """
 
 from __future__ import annotations
@@ -58,7 +58,7 @@ def test_unquoted_word_falls_back_to_string():
 
 
 def test_int_widens_to_float_against_a_float_field():
-    """`optim.lr=1` shouldn't need the trailing `.0` — dacite would reject the int."""
+    """`optim.lr=1` shouldn't need a trailing `.0` (dacite would reject the int)."""
     d = raw()
     apply_overrides(d, ["optim.lr=1"])
     assert d["optim"]["lr"] == 1.0 and isinstance(d["optim"]["lr"], float)
@@ -77,7 +77,7 @@ def test_value_may_contain_equals():
 
 
 def test_last_override_wins():
-    """What makes `--smoke --set train.max_iters=50` a longer smoke run."""
+    """This is what makes `--smoke --set train.max_iters=50` a longer smoke run."""
     d = raw()
     apply_overrides(d, ["model.n_embd=64", "model.n_embd=128"])
     assert d["model"]["n_embd"] == 128
@@ -115,7 +115,7 @@ def test_a_rejected_override_names_the_key():
 # ---- errors that only exist because the rewrite happens before dacite -----
 
 def test_typo_inside_a_block_is_caught_by_strict(config_path):
-    """The payoff: a typo'd override fails like a typo'd JSON key would."""
+    """A typo'd override fails just like a typo'd JSON key would."""
     with pytest.raises(DaciteError):
         load_run_config(config_path, ARCHES, DATAS, ["model.n_layerr=6"])
 
@@ -126,13 +126,14 @@ def test_wrong_type_is_caught_by_dacite(config_path):
 
 
 def test_post_init_sees_overridden_values(config_path):
-    """Not the file's values — the reason this can't be a post-hoc setattr."""
+    """__post_init__ sees the overridden values, not the file's, which a
+    setattr afterwards couldn't do."""
     with pytest.raises(ValueError, match="divisible"):
         load_run_config(config_path, ARCHES, DATAS, ["model.n_embd=100", "model.n_head=6"])
 
 
 def test_arch_itself_can_be_overridden(config_path):
-    """Overrides land before the tag is read, so an unknown arch is rejected as one."""
+    """Overrides are applied before the tag is read, so an unknown arch is rejected."""
     with pytest.raises(ValueError, match="unknown arch"):
         load_run_config(config_path, ARCHES, DATAS, ["arch=nope"])
 

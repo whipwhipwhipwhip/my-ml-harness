@@ -1,29 +1,28 @@
-"""Maps the `arch` tag in a config file onto the classes it names.
+"""Turns the tags in a config file (`arch`, `optim_arch`, ...) into the classes
+they name.
 
-`arch` is a discriminator: its value decides which dataclass the `model` block
-parses into and which module gets built. That has to happen in two stages — read
-the tag, *then* parse — because you can't know the target type until you've read
-the tag. A `model: GPTConfig | BigramConfig` union can't express this: dacite
-would try each member in turn and take the first that fits, ignoring the tag.
+`arch` decides which dataclass the `model` block is parsed into and which module
+gets built. That has to happen in two steps (read the tag, *then* parse the
+block), because you don't know the target type until you've read the tag. A
+`model: GPTConfig | BigramConfig` union can't do this: dacite would try each
+type in turn and take the first one that fits, ignoring the tag.
 
-The mechanism only: the `ARCHES` table itself lives with the arches
-(`nanogpt_conor/arches.py`) and arrives here as a parameter, so nothing in this
-module names GPTConfig or GPTModel and `ml_harness/` stays arch-agnostic. `DATAS` is
-passed in for the same reason and by the same route — `gpt_addition`'s dataset
-config names a task, and an import of it here would be the back-arrow the
-layering rule exists to prevent. `OPTIMS` and `TOKENIZERS` are the deliberate
-asymmetries — AdamW is torch and `tokenizers` is a generic peer
-package, so neither is project-specific and both tables live here. The line is
-"does `ml_harness/` have to name a *model* or a *task*", and it still doesn't.
+This module only has the mechanism. The `ARCHES` table lives in the project
+that defines the models and is passed in as an argument, so nothing here names a
+specific model. `DATAS` is passed in the same way, since a dataset config can be
+specific to a task. `OPTIMS`, `TOKENIZERS` and `SCHEDULES` do live here, because
+torch's optimisers, the `tokenizers` package and the schedule maths aren't
+specific to any project. The rule is: this package never has to name a *model*
+or a *task*.
 
-`DATAS` maps to a config class rather than to a spec pair, unlike the other
-three. The tag doesn't dispatch: an entry point already imports the one
-`load_data` it uses, and a uniform builder would have to be handed `repo_root`
-and `cache_dir` — caller concerns that aren't in the config and that half the
-implementations would ignore. So `data_arch` buys typing of the block,
-validation, and a run record that says what its own `data` block means. Promote
-it to a NamedTuple the day one entry point has two representations to choose
-between.
+Unlike the others, `DATAS` maps straight to a config class rather than to a
+(config class, builder) pair. The tag isn't used to pick a loader: an entry
+point already imports the one `load_data` it uses, and a shared builder
+signature would need things like `repo_root` and `cache_dir` that aren't in the
+config and that half the loaders would ignore. So `data_arch` just gets you a
+typed, validated `data` block, and a run record that says what that block means.
+If an entry point ever needs to choose between loaders, turn it into a
+NamedTuple like the others.
 """
 
 from __future__ import annotations
@@ -69,10 +68,8 @@ from tokenizers import (
     Tokenizer,
 )
 
-# callable[[input types], output_type]
-
-# strict=True so a typo'd key is an error at load rather than a silently ignored
-# hyperparameter that makes two runs look identical when they aren't
+# strict=True so a typo'd key is an error at load, rather than a hyperparameter
+# that's silently ignored and makes two different runs look identical
 _DACITE = Config(strict=True)
 
 def _adapt(optim_cls):
@@ -95,14 +92,14 @@ class OptimSpec(NamedTuple):
 def _build_adamw(cfg: AdamWConfig, params: Iterable[nn.Parameter]) -> opt.Optimizer:
     """AdamW can't use `_adapt`: torch takes one `betas` tuple, not two scalars.
 
-    The config keeps them apart so each is addressable on its own — `--set
-    optim.beta2=0.95` is a sweep axis, and one element of a list isn't.
+    The config keeps them separate so each can be set on its own (e.g.
+    `--set optim.beta2=0.95` as a sweep axis).
 
-    `weight_decay` here is the constructor default, which every group built by
-    `decay_param_groups` overrides with its own value. It is passed anyway so
-    that a caller handing this a bare parameter iterable — a test, a downstream
-    project building an optimiser by hand — gets the config's decay rather than
-    torch's silent 0.01.
+    `weight_decay` here is only the default; each group from
+    `decay_param_groups` overrides it with its own value. It's passed anyway so
+    that if someone hands this a plain list of parameters (a test, or a project
+    building an optimiser by hand), they get the config's decay rather than
+    torch's default of 0.01.
     """
     return opt.AdamW(
         params,
@@ -118,11 +115,11 @@ OPTIMS: dict[str, OptimSpec] = {
 class ScheduleSpec(NamedTuple):
     """The two things a schedule name resolves to.
 
-    `build` takes the peak lr and max_iters as well as the config because a
-    schedule is a function of the *run*, not only of its own block: the peak is
-    `optim.lr` and "decay over the whole run" is `train.max_iters`. Both are
-    passed to every builder, ignored by the constant one — same bargain as
-    TokenizerSpec's corpus.
+    `build` takes the peak lr and max_iters as well as the config, because a
+    schedule depends on other parts of the run config: the peak is `optim.lr`,
+    and "decay over the whole run" means `train.max_iters`. Every builder gets
+    both, and the constant one ignores them (same idea as TokenizerSpec's
+    corpus).
     """
 
     config_cls: type[ScheduleConfig]
@@ -136,18 +133,18 @@ SCHEDULES: dict[str, ScheduleSpec] = {
 class TokenizerSpec(NamedTuple):
     """The two things a tokenizer name resolves to.
 
-    `build` takes the corpus as well as the config because a tokenizer may or may
-    not be a function of the data it will be used on: `char` reads its alphabet
-    off the text, `regex_bpe` trains on it, and `char_fixed`/`byte`/`tiktoken`
-    ignore it entirely. One signature covers all three cases; the alternative is
-    the caller knowing which kind it built.
+    `build` takes the corpus as well as the config because some tokenizers
+    depend on the data and some don't: `char` gets its alphabet from the text,
+    `regex_bpe` trains on it, and `char_fixed`/`byte`/`tiktoken` ignore it. With
+    one signature for all of them, the caller doesn't need to know which kind
+    it's building.
     """
 
     config_cls: type[TokenizerConfig]
     build: Callable[[TokenizerConfig, str], Tokenizer]
 
-# `cfg.pad_vocab_to` goes to every one of these, since it's a field on the base
-# config: padding is a property of the id space, not of how the ids were learned.
+# Every builder passes on `cfg.pad_vocab_to`, since it's on the base config:
+# padding is about the id space, not about how the ids were learned.
 
 def _build_char(cfg: CharConfig, text: str) -> Tokenizer:
     return CharTokenizer.from_text(text, cfg.pad_vocab_to)
@@ -159,15 +156,15 @@ def _build_byte(cfg: ByteConfig, text: str) -> Tokenizer:
     return ByteTokenizer(cfg.pad_vocab_to)
 
 def _build_regex_bpe(cfg: RegexBPEConfig, text: str) -> Tokenizer:
-    # `or NO_SPLIT_PATTERN` rather than a branch: null in the config means "the
-    # tokenizer's own default", and the default stays spelled out in one place.
+    # null in the config means "the tokenizer's own default", and that default
+    # is only defined in one place (NO_SPLIT_PATTERN).
     tok = RegexTokenizer(
         special_tokens=cfg.special_tokens,
         split_pattern=cfg.split_pattern or NO_SPLIT_PATTERN,
         pad_vocab_to=cfg.pad_vocab_to,
     )
-    # `vocab_size` is the merge target, `pad_vocab_to` is what gets reported —
-    # train to the former, and the padding sits above it untouched by merges.
+    # `vocab_size` is the merge target and `pad_vocab_to` is the size that gets
+    # reported. Train up to the former; the padding sits above it.
     tok.train(text, cfg.vocab_size)
     return tok
 
@@ -195,7 +192,7 @@ def pop_and_validate(raw, key, path, valid_set):
     try:
         spec = valid_set[value]
     except KeyError:
-        # `key`, not a hardcoded "arch" — this rejects optimisers too
+        # `key` rather than a hardcoded "arch", since this checks optimisers etc. too
         raise ValueError(
             f"unknown {key} {value!r}; expected one of {sorted(valid_set)}"
         ) from None
@@ -206,10 +203,10 @@ def pop_and_validate(raw, key, path, valid_set):
 # Overrides
 
 def _parse_value(text: str):
-    """`--set` hands us strings; the config file's own types are JSON's.
+    """Turn a `--set` string into a JSON value, like the config file has.
 
-    Unquoted words aren't valid JSON, so `runtime.device=mps` and a `note=`
-    fall through to the string as typed.
+    Unquoted words aren't valid JSON, so things like `runtime.device=mps` or a
+    `note=` are kept as the string that was typed.
     """
     try:
         return json.loads(text)
@@ -220,12 +217,11 @@ def _parse_value(text: str):
 def apply_overrides(raw: dict, overrides: Iterable[str]) -> None:
     """Apply `dotted.key=value` overrides to the raw config dict, in place.
 
-    Before dacite, not after: the config dataclasses are frozen, so an override
-    applied to a built RunConfig raises FrozenInstanceError. Rewriting the dict
-    the config is *built from* also means an override is validated by exactly
-    the path a hand-typed JSON value is — `strict=True` rejects a typo'd key
-    inside a block, dacite still type-checks, and `__post_init__` still sees the
-    final values rather than the file's.
+    This happens before dacite, not after: the config dataclasses are frozen,
+    so changing a built RunConfig raises FrozenInstanceError. Changing the dict
+    the config is *built from* also means an override is validated exactly like
+    a value typed into the JSON file: `strict=True` rejects a typo'd key inside a
+    block, dacite still checks types, and `__post_init__` sees the final values.
     """
     for override in overrides:
         if "=" not in override:
@@ -248,9 +244,9 @@ def apply_overrides(raw: dict, overrides: Iterable[str]) -> None:
 
         field = parts[-1]
 
-        # A typo'd *top-level* key would otherwise pass silently: load_run_config
-        # reads named keys out of `raw`, so an extra one goes nowhere. Inside a
-        # block there's no need for this check — strict=True is what catches it.
+        # A typo'd *top-level* key would otherwise be silently ignored, since
+        # load_run_config only reads the keys it knows about. Inside a block
+        # this isn't needed, because strict=True catches it.
         if node is raw and field not in raw:
             raise ValueError(
                 f"override {key!r}: no such key; expected one of {sorted(raw)}"
@@ -258,9 +254,9 @@ def apply_overrides(raw: dict, overrides: Iterable[str]) -> None:
 
         value = _parse_value(text)
 
-        # `--set optim.lr=1` is an int against a float field, which dacite rejects.
-        # The file already says which one it is, so use that rather than make the
-        # caller remember to type the trailing `.0`.
+        # `--set optim.lr=1` gives an int for a float field, which dacite
+        # rejects. The file already has a float there, so convert rather than
+        # making the caller remember to type `1.0`.
         current = node.get(field)
         if isinstance(current, float) and type(value) is int:
             value = float(value)
@@ -279,23 +275,21 @@ def load_run_config(
 ) -> RunConfig:
     """Parse a config file into a RunConfig, with `model` typed by `arch`.
 
-    Built field-by-field rather than by handing the whole dict to dacite: the
-    `model` block is already a parsed object by this point, and dacite's
-    behaviour when a dataclass field receives a non-dict is version-dependent.
-    Explicit costs a line per section and stays predictable.
+    Built one field at a time rather than by handing the whole dict to dacite,
+    because each block's class depends on its tag, and dacite's behaviour when a
+    dataclass field is given something that isn't a dict varies between
+    versions. It costs a line per section but is predictable.
 
-    `overrides` are applied to the raw dict first — before the `arch` tag is even
-    read, so `--set arch=...` selects the config class the way the file would.
+    `overrides` are applied to the raw dict first, before the `arch` tag is
+    read, so `--set arch=...` picks the config class just like the file would.
     """
     raw = json.loads(Path(path).read_text(encoding="utf-8"))
 
-    # The one optional pair of keys, filled in *before* the overrides run rather
-    # than after. Two things depend on that order: a file written before
-    # schedules existed still loads, and `--set schedule_arch=cosine --set
-    # schedule.warmup_steps=100` works against such a file — apply_overrides
-    # navigates the dict it's given and refuses to invent a section, so an
-    # absent `schedule` block would otherwise make the schedule the one thing
-    # you can't reach from the command line.
+    # The only optional keys, filled in *before* the overrides are applied.
+    # That way a file written before schedules existed still loads, and
+    # `--set schedule_arch=cosine --set schedule.warmup_steps=100` still works on
+    # it. apply_overrides won't create a missing section, so without this you
+    # couldn't set the schedule from the command line for such a file.
     raw.setdefault("schedule_arch", "constant")
     raw.setdefault("schedule", {})
 
@@ -307,8 +301,8 @@ def load_run_config(
         raw, "tokenizer_arch", path, TOKENIZERS
     )
     schedule, schedule_spec = pop_and_validate(raw, "schedule_arch", path, SCHEDULES)
-    # The only one whose table maps straight to a class — see the module
-    # docstring. `pop_and_validate` doesn't care either way; it looks up a tag.
+    # The only table that maps straight to a class (see the module docstring).
+    # `pop_and_validate` doesn't care either way.
     data, data_cls = pop_and_validate(raw, "data_arch", path, DATAS)
 
     return RunConfig(
@@ -331,14 +325,14 @@ def load_run_config(
 def build_model(cfg: RunConfig, vocab_size: int, ARCHES: dict[str, ArchSpec]) -> nn.Module:
     """Build the module `cfg.arch` names.
 
-    vocab_size is derived from the data, not chosen, so it arrives as an argument
-    rather than through the config file — every arch builder takes it second, for
-    the same reason GPTModel does. The consequence to keep in mind: a checkpoint's
-    saved RunConfig alone doesn't say how wide the embedding was, so rebuilding
-    from one means re-reading the dataset (or recording vocab_size elsewhere).
+    vocab_size comes from the data rather than being chosen, so it's passed in
+    as an argument rather than read from the config. Every arch builder takes it
+    as the second argument. One consequence: a saved RunConfig alone doesn't say
+    how big the embedding was, so to rebuild a model you need vocab_size from
+    somewhere else (checkpoints store it for this reason).
 
-    `cfg.arch` was validated by load_run_config, so this lookup can't miss for a
-    RunConfig that came from there.
+    `cfg.arch` was already checked by load_run_config, so this lookup can't fail
+    for a RunConfig that came from there.
     """
     return ARCHES[cfg.arch].build(cfg.model, vocab_size)
 
@@ -351,22 +345,21 @@ def decay_param_groups(
 ) -> list[dict[str, Any]]:
     """GPT-2's rule: decay tensors of dim >= 2, leave everything else alone.
 
-    Weight matrices and embeddings are decayed; biases and LayerNorm gains are
-    not. The dimension is a proxy for the distinction that matters — a matrix
-    maps between spaces and shrinking it is regularisation, while a bias or a
-    gain is a per-unit offset that decay just drags toward an arbitrary zero.
+    Weight matrices and embeddings are decayed; biases and LayerNorm gains
+    aren't. Dimension is a simple way to tell them apart: shrinking a matrix is
+    regularisation, but a bias or gain is a per-unit offset, and decay would
+    only pull it towards zero for no reason.
 
-    A free function rather than something inside `_build_adamw` because the
-    split is a property of the *model's parameter shapes*, not of the optimiser
-    that consumes it: a second decaying optimiser would want exactly this list.
+    It's a separate function rather than part of `_build_adamw` because the
+    split depends on the *model's parameter shapes*, not on the optimiser. Any
+    other optimiser with weight decay would want the same list.
 
-    `model.parameters()` de-duplicates shared tensors, so a weight-tied
-    embedding and output head is one entry here rather than two — decayed twice
-    per step is not a thing this can produce.
+    `model.parameters()` skips duplicates, so a tied embedding and output head
+    shows up once here and can't be decayed twice per step.
 
-    Returns param groups rather than a flat iterable, which is the interface
-    every torch optimiser already accepts in place of one. Note the loop writes
-    the scheduled lr into *every* group, which is what makes two of them safe.
+    Returns param groups, which every torch optimiser accepts in place of a
+    flat list of parameters. The loop writes the scheduled lr into *every*
+    group, so having two groups is safe.
     """
     params = [p for p in model.parameters() if p.requires_grad]
     return [
@@ -379,15 +372,13 @@ def build_optimiser(cfg: RunConfig, model: nn.Module) -> opt.Optimizer:
     """Build the module `cfg.optim_arch` names, over GPT-2's two param groups.
 
     The grouping happens here rather than in the spec's `build` because this is
-    where the model is: `OptimSpec.build` takes parameters, and widening it to
-    take a module for the sake of one optimiser would put a model in the
-    signature of every optimiser that never needs one.
+    where the model is available. `OptimSpec.build` takes parameters, and making
+    every optimiser take a whole module for this one purpose seemed wrong.
 
-    An optimiser without a `weight_decay` is the case to watch — it would be
-    handed groups carrying a key it doesn't know. Nothing in OPTIMS is such an
-    optimiser today, and torch's are near-uniformly decay-capable; the day one
-    arrives, this is the line that decides whether the split belongs to
-    `build_optimiser` or to the spec.
+    One thing to watch out for: an optimiser with no `weight_decay` option would
+    be given groups with a key it doesn't understand. Nothing in OPTIMS is like
+    that today, and almost all of torch's optimisers support decay. If one is
+    ever added, the split may need to move from here into the spec.
     """
     return OPTIMS[cfg.optim_arch].build(
         cfg.optim, decay_param_groups(model, cfg.optim.weight_decay)
@@ -396,10 +387,10 @@ def build_optimiser(cfg: RunConfig, model: nn.Module) -> opt.Optimizer:
 def build_lr_schedule(cfg: RunConfig) -> LRSchedule:
     """Build the `(step) -> lr` closure `cfg.schedule_arch` names.
 
-    Reaches across three blocks of the config, which is why it's here and not on
-    the schedule itself: `optim.lr` is the peak and `train.max_iters` is what
-    "decay over the whole run" resolves against. Built once per run, so the loop
-    holds a closure over resolved numbers rather than a config to interpret.
+    This needs three blocks of the config, which is why it's here rather than
+    on the schedule config: `optim.lr` is the peak and `train.max_iters` is the
+    default length of the decay. It's built once per run, so the loop just holds
+    a function of the step and never has to interpret a config.
     """
     return SCHEDULES[cfg.schedule_arch].build(
         cfg.schedule, cfg.optim.lr, cfg.train.max_iters
@@ -412,8 +403,8 @@ def build_lr_schedule(cfg: RunConfig) -> LRSchedule:
 def build_tokenizer(cfg: RunConfig, text: str) -> Tokenizer:
     """Build the tokenizer `cfg.tokenizer_arch` names, over `text`.
 
-    Takes the whole RunConfig rather than the tokenizer block alone, to match
-    build_model/build_optimiser: the caller passes what it has. `text` is the
-    corpus, which some tokenizers need and others ignore — see TokenizerSpec.
+    Takes the whole RunConfig rather than just the tokenizer block, to match
+    build_model/build_optimiser. `text` is the corpus, which some tokenizers
+    need and others ignore (see TokenizerSpec).
     """
     return TOKENIZERS[cfg.tokenizer_arch].build(cfg.tokenizer, text)

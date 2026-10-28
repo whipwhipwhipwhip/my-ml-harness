@@ -1,25 +1,24 @@
 """A complete, minimal project to run the harness against.
 
-Two jobs, and they turn out to be the same job:
+It's for two things:
 
-1. **The harness's own tests need something to drive.** Every table the harness
-   takes as a parameter (`ARCHES`, `DATAS`) has to be filled by *somebody*, and
-   filling them from a real project would make the harness's test suite depend on
-   a GPT — which is exactly the arrow the layering rule forbids.
-2. **Anyone wiring a new model in needs an example.** This is the smallest
-   complete answer to "what do I have to supply?": a `ModelConfig` subclass, an
+1. **The harness's own tests.** The tables the harness takes as arguments
+   (`ARCHES`, `DATAS`) have to come from somewhere, and taking them from a real
+   project would make the harness's tests depend on that project, which is
+   backwards.
+2. **An example for wiring in a new model.** This is the smallest complete
+   answer to "what do I have to supply?": a `ModelConfig` subclass, an
    `nn.Module` taking `(cfg, vocab_size)`, a table entry, a `load_data`, and the
-   `run()` at the bottom that puts them in the right order.
+   `run()` at the bottom that puts them together in the right order.
 
-Shipped rather than left in `tests/` for the second reason. It imports no pytest
-and defines no fixtures, so it costs a downstream user nothing to have on the
-path — the fixtures that use it live in `tests/ml_harness/conftest.py`.
+It's in the package rather than in `tests/` because of the second point. It
+doesn't import pytest or define fixtures, so it's harmless to have installed.
+The fixtures that use it are in `tests/ml_harness/conftest.py`.
 
-`TinyModel` is a real transformer block rather than a bare embedding: the
-harness's checkpoint, compile and sampling paths all have to survive contact with
-parameter sharing, multi-head reshapes and a generation loop, and a model too
-simple to have those isn't exercising them. It is still far too small to learn
-anything, which is the point — nothing here asserts on loss going down.
+`TinyModel` is a real transformer block rather than just an embedding, because
+the harness's checkpoint, compile and sampling code should be tested against a
+model with multi-head reshapes and a generation loop. It's still far too small
+to learn anything, and nothing here checks that the loss goes down.
 """
 
 from __future__ import annotations
@@ -57,10 +56,9 @@ from ml_harness.store import RunDir
 class TinyConfig(ModelConfig):
     """The reference architecture's hyperparameters.
 
-    Field names deliberately match the project GPTs', so a config written for one
-    is readable as the other and `--set model.n_layer=2` means the same thing in
-    both. `vocab_size` is absent for the usual reason: it's derived from the data,
-    not chosen, so whoever loaded the corpus supplies it.
+    Field names match the GPT projects', so `--set model.n_layer=2` means the
+    same thing in both. There's no `vocab_size`, since that comes from the data
+    and is passed in by whoever loaded the corpus.
     """
 
     n_embd: int = 16
@@ -70,10 +68,8 @@ class TinyConfig(ModelConfig):
     dropout: float = 0.0
 
     def __post_init__(self):
-        # The same guard every multi-head model needs, and worth having here
-        # rather than only in the projects: it's what makes "a bad config raises
-        # at load, next to the value that caused it" testable against the
-        # reference arch instead of against a GPT.
+        # The usual multi-head check. Having it here means "a bad config raises
+        # at load time" can be tested against this model rather than a GPT.
         if self.n_embd % self.n_head != 0:
             raise ValueError(
                 f"n_embd ({self.n_embd}) must be divisible by n_head ({self.n_head})"
@@ -81,7 +77,7 @@ class TinyConfig(ModelConfig):
 
     @property
     def head_size(self) -> int:
-        """Derived, not stored — a stored copy can disagree with n_embd // n_head."""
+        """Computed rather than stored, so it can't disagree with n_embd // n_head."""
         return self.n_embd // self.n_head
 
 
@@ -105,8 +101,7 @@ class TinyBlock(nn.Module):
     def forward(self, x):
         B, T, C = x.shape
         q, k, v = self.attn(self.ln1(x)).split(C, dim=2)
-        # The multi-head reshape the harness's compile and checkpoint paths have
-        # to survive: (B, T, C) -> (B, heads, T, head_size).
+        # The multi-head reshape: (B, T, C) -> (B, heads, T, head_size).
         q, k, v = (
             t.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
             for t in (q, k, v)
@@ -120,8 +115,8 @@ class TinyBlock(nn.Module):
 class TinyModel(nn.Module):
     """The smallest thing that is still a language model.
 
-    Takes `(cfg, vocab_size)` — the signature every entry in an `ARCHES` table
-    has to have, and the one thing `ml_ml_harness/registry.py` assumes about a model.
+    Takes `(cfg, vocab_size)`, which is the signature every entry in an
+    `ARCHES` table needs, and the only thing `registry.py` assumes about a model.
     """
 
     def __init__(self, cfg: TinyConfig, vocab_size: int):
@@ -152,8 +147,7 @@ class TinyModel(nn.Module):
     def generate(self, idx, max_new_tokens: int, top_k: int | None = None):
         """Autoregressive sampling, cropped to the context window.
 
-        Present because the harness writes a sample at every eval, so an arch
-        that can't generate can't exercise that path at all.
+        Needed because the harness writes a sample at every eval.
         """
         for _ in range(max_new_tokens):
             logits, _ = self(idx[:, -self.cfg.block_size :])
@@ -166,8 +160,8 @@ class TinyModel(nn.Module):
         return idx
 
 
-# The two tables an entry point hands to the harness. One entry each: this is a
-# reference, not a menu.
+# The two tables an entry point passes to the harness. One entry each, since
+# this is just an example.
 ARCHES: dict[str, ArchSpec] = {"tiny": ArchSpec(TinyConfig, TinyModel)}
 DATAS: dict[str, type[DataConfig]] = {"file": FileDataConfig}
 
@@ -177,10 +171,11 @@ DATAS: dict[str, type[DataConfig]] = {"file": FileDataConfig}
 
 @dataclass(frozen=True)
 class TinyData:
-    """The duck type `loop.py` and `runner.py` read a dataset through.
+    """The interface `loop.py` and `runner.py` use to read a dataset.
 
-    Four things, and the harness never asks for a fifth: two splits it can batch
-    from, the tokenizer that made them, and the corpus hash for provenance.
+    The harness only needs four things: splits it can draw batches from (via
+    `get_batch`), the tokenizer that made them, and the corpus hash for
+    provenance.
     """
 
     train: torch.Tensor
@@ -225,21 +220,21 @@ def load_data(
 ) -> TinyData:
     """Read a corpus, tokenize it, split it by position.
 
-    `build_tokenizer` is a callable taking the corpus text, not a config — that's
-    what keeps this module ignorant of the registry, and it's why an entry point
-    passes `partial(registry.build_tokenizer, cfg)`. Some tokenizers are built
-    *from* the corpus, and this function is what has the text.
+    `build_tokenizer` is a function that takes the corpus text, not a config,
+    which is why an entry point passes `partial(registry.build_tokenizer, cfg)`.
+    Some tokenizers are built *from* the corpus, and this function is where the
+    text is.
 
-    `cache_dir=None` disables the token cache, and defaults to off here on
-    purpose: a caller that hasn't thought about where the cache goes must not end
-    up writing to a developer's real one.
+    `cache_dir=None` turns the token cache off, and it's off by default so that
+    a caller that hasn't chosen a cache location (like a test) never writes to
+    a developer's real one.
     """
     raw = Path(path).read_bytes()
     sha256 = hashlib.sha256(raw).hexdigest()
     text = raw.decode("utf-8")
 
-    # Built before the cache is consulted, because the tokenizer's fingerprint is
-    # half the cache key — so this memoises *encoding*, never construction.
+    # Built before checking the cache, because the tokenizer's fingerprint is
+    # half the cache key. So only *encoding* is cached, not building the tokenizer.
     tok = build_tokenizer(text)
     tokens = _encode_cached(text, tok, sha256, path, cache_dir)
 
@@ -249,10 +244,10 @@ def load_data(
 
 
 def _encode_cached(text, tok: Tokenizer, data_sha256: str, path, cache_dir):
-    """`tok.encode(text)`, memoised on disk by (corpus, tokenizer).
+    """`tok.encode(text)`, cached on disk by (corpus, tokenizer).
 
-    A miss and a disabled cache take the same path, so a cache bug can change how
-    long a run waits but never what it trains on.
+    A miss and a disabled cache both just call `encode`, so a cache bug can
+    change how long a run takes but not what it trains on.
     """
     if cache_dir is None:
         return tok.encode(text)
@@ -279,10 +274,10 @@ def _encode_cached(text, tok: Tokenizer, data_sha256: str, path, cache_dir):
 
 # ---- the collaborators the loop talks to ----------------------------------
 #
-# `loop.train` reaches the outside world through exactly two objects, and these
-# are complete implementations of both. That they can be this small is the
-# property worth protecting: if a fake here has to grow a filesystem or a real
-# model, the loop has acquired a dependency it shouldn't have.
+# `loop.train` only talks to the outside world through two objects, and these
+# are complete implementations of both. It's worth keeping them this small: if
+# a fake here ever needs a filesystem or a real model, the loop has picked up a
+# dependency it shouldn't have.
 
 
 class FakeLogger:
@@ -301,9 +296,9 @@ class FakeLogger:
 class SpyEval:
     """An `on_eval(step, losses)` that records what it saw, and when.
 
-    `logged_at_call` is how the ordering guarantee gets tested: the loop must
-    have finished logging a step's metrics before it calls back, because a
-    checkpoint callback that reads the metrics file relies on it.
+    `logged_at_call` is used to test the ordering: the loop must finish
+    logging a step's metrics before calling `on_eval`, because a callback that
+    reads the metrics file relies on that.
     """
 
     def __init__(self, logger=None):
@@ -319,27 +314,27 @@ class SpyEval:
 
 # ---- the entry point ------------------------------------------------------
 #
-# The last thing a project has to supply, and the one the harness can't: the
-# order the pieces go together in. `runner.py` owns the two halves that name no
-# model (`build_run`'s four silent ordering constraints, and `record_run`'s
-# lifecycle), so what's left here is what genuinely varies per project — loading
-# the data, and what to do at each eval.
+# The last thing a project has to supply: putting the pieces together in the
+# right order. `runner.py` handles the parts that don't depend on the model
+# (`build_run`'s ordering, and `record_run`'s bookkeeping), so what's left here
+# is what actually differs per project: loading the data, and what to do at
+# each eval.
 #
-# Shipped for the same reason as the rest of this module: it is the worked answer
-# to "what does an entry point look like", and it is what the harness's own tests
-# drive when the subject is the record rather than the loop. A real project's
-# `train.py` adds argparse, its own paths and its own smoke overrides on top of
-# this shape; none of those belong here, because the harness resolves no path it
-# wasn't given.
+# It's an example of what an entry point looks like, and it's also what the
+# harness's tests use when they're checking the run record rather than the
+# loop. A real project's `train.py` would add argparse, its own paths and its
+# own smoke overrides on top. None of that belongs here, because the harness
+# never makes up a path it wasn't given.
 
 
 class EvalRecorder:
-    """The `on_eval` callback: console, best checkpoint, samples. No metrics.
+    """The `on_eval` callback: printing, the best checkpoint, and samples.
+    Metrics are the loop's job, not this.
 
-    Owns `best_val` because it owns the best checkpoint — if the loop tracked the
-    value and this decided the write, one decision would live in two places. The
-    loop has already logged the step's metrics by the time this is called, which
-    is what lets a callback read the metrics file back.
+    Tracks `best_val` itself because it's what writes the best checkpoint; if
+    the loop tracked it instead, one decision would be split across two places.
+    The loop has already logged the step's metrics when this is called, so a
+    callback can read the metrics file.
     """
 
     def __init__(self, rd, model, optimiser, data, cfg, device, echo=None):
@@ -366,24 +361,23 @@ class EvalRecorder:
             self._write_sample(step, losses["val"])
 
     def _checkpoint(self, step: int) -> dict:
-        # The same payload the `last` checkpoint gets, from one definition — a
-        # `best` that couldn't be loaded the same way as a `last` would be a
-        # nasty thing to discover.
+        # Same payload as the `last` checkpoint, from the same function, so
+        # both load the same way.
         return checkpoint_payload(
             self.model, self.optimiser, step, self.data.tokenizer.vocab_size, self.cfg
         )
 
     def _write_sample(self, step: int, val_loss: float) -> None:
         # The prompt is text and gets encoded here rather than being a hardcoded
-        # id: id 0 is '\n' under a character vocabulary but byte 0x00 under BPE.
-        # `or [0]` — an empty prompt means "unconditional", but generate() needs
-        # at least one token to attend to.
+        # id: id 0 is '\n' for a character vocabulary but byte 0x00 for BPE.
+        # `or [0]` because an empty prompt means "unconditional", but generate()
+        # needs at least one token to start from.
         prompt = self.data.tokenizer.encode(self.cfg.train.sample_prompt)
         context = torch.tensor([prompt or [0]], dtype=torch.long, device=self.device)
-        # eval() for the same reason `evaluate` does it: on_eval runs after the
-        # loop has put the model back in train mode, so without this every sample
-        # is drawn with dropout active. Restore what we found, in `finally`, so a
-        # failure to generate doesn't leave training running with dropout off.
+        # eval() for the same reason `evaluate` uses it: on_eval runs after the
+        # loop has put the model back in train mode, so otherwise every sample
+        # would be drawn with dropout on. The mode is restored in `finally`, so
+        # if generation fails, training doesn't carry on with dropout off.
         was_training = self.model.training
         self.model.eval()
         try:
@@ -408,54 +402,53 @@ def run(
     smoke: bool = False,
     echo=None,
 ) -> RunDir:
-    """Parse -> build -> train -> persist. Returns the RunDir.
+    """Parse the config, build, train, and save. Returns the RunDir.
 
-    The three leading positional parameters are the `sweep.RunFn` contract
-    (`(config_path, overrides, runs_root) -> RunDir`), so this can be handed
-    straight to `run_sweep`; everything a project would vary is keyword-only
+    The first three arguments match `sweep.RunFn`
+    (`(config_path, overrides, runs_root) -> RunDir`), so this can be passed
+    straight to `run_sweep`. Everything a project might change is keyword-only
     after them.
 
-    `runs_root` has no default on purpose — the harness resolves no path it
-    wasn't given, and a default here would be an assertion about somebody's tree.
-    `cache_dir=None` disables the token cache, which is the right default for a
-    caller that hasn't decided where the cache goes: a test must never write to a
-    developer's real one.
+    `runs_root` has no default on purpose: the harness never makes up a path
+    it wasn't given. `cache_dir=None` turns the token cache off, which is the
+    right default when no one has chosen where the cache goes (a test must
+    never write to a developer's real one).
 
-    `smoke` only *labels* the record. Shrinking the run and diverting it to a
-    subdirectory stay with the project, because the overrides that shrink a model
-    name that model's fields — see `parser.parse_args`' `--smoke`, which is the
-    flag a project's `main()` turns into its own override list.
+    `smoke` only *labels* the record. Shrinking the run and putting it in a
+    subdirectory is up to the project, because the overrides that shrink a
+    model use that model's field names. See `--smoke` in `parser.parse_args`,
+    which a project's `main()` turns into its own list of overrides.
     """
     if runs_root is None:
         raise ValueError(
             "runs_root is required: the harness resolves no path it wasn't given"
         )
 
-    # Into the loader rather than applied afterwards — the config dataclasses are
-    # frozen, so an override against a built RunConfig raises FrozenInstanceError.
+    # Overrides go into the loader rather than being applied afterwards: the
+    # config dataclasses are frozen, so changing a built RunConfig would raise
+    # FrozenInstanceError.
     cfg = load_run_config(config_path, ARCHES, DATAS, overrides)
 
     device = resolve_device(cfg.runtime.device)
-    # Unconditionally, not only when it differs from the default: this is process
-    # state, and a sweep runs many points in one process.
+    # Always, not just when it isn't the default: it's process-wide state, and a
+    # sweep runs many points in one process.
     set_matmul_precision(cfg.runtime.matmul_precision)
-    # Built *now* rather than at the call site, so a bad dtype fails before
-    # `new_run` has put a directory on disk. One instance per run; it's
-    # re-enterable.
+    # Built now rather than later, so a bad dtype fails before `new_run` has
+    # created a directory. One instance does for the whole run.
     amp = autocast_context(device, cfg.runtime.autocast_dtype)
 
     data = load_data(
         cfg.data.path,
         cfg.data.split_frac,
-        # A callable rather than a config, because some tokenizers are built
-        # *from* the corpus and `load_data` is what has the text.
+        # A function rather than a config, because some tokenizers are built
+        # *from* the corpus, and `load_data` is where the text is.
         partial(build_tokenizer, cfg),
-        # Two switches meaning different things: `cache_dir` is where a caller
-        # may write, `data.cache` is whether this run wants caching at all.
+        # Two different switches: `cache_dir` is where the caller allows writing,
+        # and `data.cache` is whether this run wants caching at all.
         cache_dir if cfg.data.cache else None,
     )
-    # Seed, build, compile, optimiser, schedule — four ordering constraints, all
-    # of which fail silently. See `build_run`.
+    # Seed, build, compile, optimiser, schedule. The order matters and getting
+    # it wrong fails silently; see `build_run`.
     built = build_run(cfg, data.tokenizer.vocab_size, ARCHES, device)
     eval_batches = draw_eval_batches(data, cfg, device)
 
@@ -465,16 +458,16 @@ def run(
         data,
         built,
         device=device,
-        # The harness only reads this to shell out to git for provenance; the
-        # config's own directory is the honest answer when nobody said otherwise.
+        # Only used to run git for provenance. If none was given, the config
+        # file's directory is a reasonable guess.
         repo_root=repo_root if repo_root is not None else Path(config_path).parent,
         smoke=smoke,
     ) as (rd, record):
-        # `with` inside, so the logger is closed before record_run's summarize()
-        # reads the file back.
+        # This `with` goes inside, so the logger is closed before record_run's
+        # summarize() reads the file back.
         with MetricLogger(rd.metrics_path) as logger:
-            # `built.model`, not `built.runnable`: the recorder checkpoints and
-            # samples, and both want the uncompiled module.
+            # `built.model`, not `built.runnable`: the recorder saves
+            # checkpoints and samples, and both need the uncompiled module.
             recorder = EvalRecorder(
                 rd, built.model, built.optimiser, data, cfg, device, echo
             )

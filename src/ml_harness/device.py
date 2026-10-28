@@ -4,30 +4,28 @@ import torch
 
 MATMUL_PRECISIONS = ("highest", "high", "medium")
 
-# bf16 only, deliberately. fp16 has fp32's precision but a much narrower exponent
-# range, so small gradients underflow to zero and it needs a GradScaler to be
-# trainable at all. bf16 keeps fp32's exponent range and spends the bits on
-# mantissa instead, which is why it needs no scaler and why the lecture uses it.
+# bf16 only. fp16 has a much narrower exponent range than fp32, so small
+# gradients underflow to zero, and it needs a GradScaler to train at all. bf16
+# keeps fp32's exponent range and gives up mantissa bits instead, which is why
+# it needs no scaler and why the lecture uses it.
 AUTOCAST_DTYPES = {"bf16": torch.bfloat16}
 
 def autocast_context(device, dtype: str | None = None):
-    """A context manager for the forward pass. `None` means fp32 — a nullcontext.
+    """A context manager for the forward pass. `None` means fp32 (a nullcontext).
 
-    Returns rather than applies, because unlike `set_matmul_precision` this isn't
-    a global: autocast is scoped, and *what it's scoped around* is the whole
-    subtlety. It wraps the forward pass and the loss, and nothing else —
-    `backward()` and `optimiser.step()` go outside it. That isn't a style
-    preference. Autograd records the dtype each op ran in, so the backward pass
-    already runs in the matching precision without being told; putting it inside
-    the context is what the torch docs specifically warn against. And the step
-    stays fp32 because the parameters were never cast — autocast casts op
-    *inputs*, so the master weights and their grads are fp32 throughout, which is
-    what keeps a small update from vanishing when it's added to a large weight.
+    Returned rather than applied, because unlike `set_matmul_precision` this
+    isn't global: autocast only applies inside a block, and what goes inside the
+    block matters. It should wrap the forward pass and the loss and nothing else;
+    `backward()` and `optimiser.step()` go outside it. Autograd remembers the
+    dtype each op ran in, so backward already uses the right precision, and the
+    torch docs specifically warn against running it under autocast. The step
+    stays fp32 because the parameters are never cast (autocast casts the inputs
+    to each op), so the weights and their gradients are fp32 throughout. That's
+    what stops a small update from disappearing when added to a large weight.
 
-    Built by the caller and passed down, like `eval_batches` and the resolved
-    device, so `loop.py` keeps its two-import list and its ignorance of config
-    plumbing. The returned object is re-enterable, so one instance serves every
-    iteration of a run.
+    The caller builds this and passes it down, like `eval_batches` and the
+    device, so `loop.py` doesn't need to know about the config. The returned
+    object can be entered repeatedly, so one instance does for a whole run.
     """
     if dtype is None:
         return contextlib.nullcontext()
@@ -50,20 +48,19 @@ def autocast_context(device, dtype: str | None = None):
     )
 
 def set_matmul_precision(precision: str = "highest") -> None:
-    """How fp32 matmuls may be computed. Process-global, so callers set it per run.
+    """How fp32 matmuls may be computed. Global to the process, so set it per run.
 
-    Lives beside `resolve_device` because it's the same kind of statement — not
-    "what to compute" but "on what, and how exactly". The loop stays ignorant of
-    it: a global torch setting isn't something a function that takes objects and
-    returns facts should be reaching for.
+    Lives next to `resolve_device` because it's the same kind of setting: not
+    what to compute, but where and how. The loop doesn't touch it, since it's a
+    global torch setting.
 
-    Callers must call this on *every* run rather than only when the value is
-    non-default. It sets process state, and `sweep.py` drives many runs in one
-    process, so a point that skipped the call would silently inherit whatever the
-    previous point asked for.
+    Callers must call this on *every* run, not just when the value isn't the
+    default. It sets process-wide state, and `sweep.py` runs many points in one
+    process, so a point that skipped it would silently get whatever the previous
+    point used.
 
-    Validated here rather than left to torch so an unknown value fails next to
-    the config that named it, the same way `resolve_device` rejects a bad device.
+    Checked here rather than left to torch, so an unknown value gives a clear
+    error, the same way `resolve_device` rejects a bad device.
     """
     if precision not in MATMUL_PRECISIONS:
         raise RuntimeError(
@@ -73,22 +70,23 @@ def set_matmul_precision(precision: str = "highest") -> None:
     torch.set_float32_matmul_precision(precision)
 
 def compile_model(model, enabled: bool = False):
-    """The module to *run*. The caller keeps the original, which is what it saves.
+    """The module to *run*. The caller keeps the original, and saves that one.
 
-    That split is the whole reason this is a named function rather than an inline
-    ternary. `torch.compile` returns an `OptimizedModule` wrapper holding the real
-    module as `_orig_mod`, and `nn.Module.state_dict` prefixes by child name, so a
-    compiled model's keys come out as `_orig_mod.weight` instead of `weight`. A
-    checkpoint written from the wrapper won't load into an uncompiled model —
-    which is every later analysis, every resumed run, and every test. So entry
-    points compile into a *second* name and go on checkpointing the first.
+    This is a named function rather than an inline ternary to make that split
+    obvious. `torch.compile` returns an `OptimizedModule` wrapper that holds the
+    real module as `_orig_mod`, and `state_dict` prefixes keys with the child's
+    name, so a compiled model's keys come out as `_orig_mod.weight` instead of
+    `weight`. A checkpoint saved from the wrapper won't load into an uncompiled
+    model, which is what every later analysis, resumed run and test uses. So
+    entry points keep the compiled model under a *second* name and save the
+    first.
 
-    The parameters are the same tensor objects either way, so an optimiser built
-    from the original updates exactly what the compiled module runs.
+    The parameters are the same tensors either way, so an optimiser built from
+    the original updates exactly what the compiled module runs.
 
-    Sampling stays on the original for a different reason: generation grows the
-    context by one token per step, and a new sequence length is a new shape, so a
-    compiled `generate` recompiles its way through the sample.
+    Sampling also uses the original, for a different reason: generation adds
+    one token per step, and each new sequence length is a new shape, so a
+    compiled `generate` would keep recompiling.
     """
     return torch.compile(model) if enabled else model
 

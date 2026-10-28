@@ -1,8 +1,7 @@
 """The analysis layer against hand-built frames.
 
-Cheapest tier: `load_runs` already has a round-trip test, so these never touch a
-directory. What's under test is the reduction from "24 runs x 72 columns" to a
-statement about an experiment.
+Cheap tests: these never touch a directory. They check the step from
+"24 runs x 72 columns" to something you can say about an experiment.
 """
 
 from __future__ import annotations
@@ -56,15 +55,15 @@ def test_varying_ignores_non_config_columns():
 
 def test_a_column_only_some_runs_have_is_not_an_axis():
     """A field added after some runs were written: NaN in the old rows, one
-    value in the new ones. That's a record gap, not an ablation."""
+    value in the new ones. That's a gap in the records, not an ablation."""
     runs = frame([run("a", 1e-3, 0, 2.5), run("b", 1e-3, 0, 2.4)])
     runs.loc[1, "config.train.top_k"] = 50
     assert "config.train.top_k" not in varying(runs)
 
 
 def test_an_unhashable_config_value_does_not_raise():
-    """`special_tokens` is a list. `nunique()` on lists raises, which would make
-    one tokenizer config break every table in the notebook."""
+    """`special_tokens` is a list, and `nunique()` raises on lists, so one
+    tokenizer config would break every table."""
     runs = frame([run("a", 1e-3, 0, 2.5), run("b", 1e-3, 0, 2.4)])
     runs["config.tokenizer.special_tokens"] = [["<|end|>"], ["<|end|>", "<|pad|>"]]
     assert varying(runs) == ["config.tokenizer.special_tokens"]
@@ -87,7 +86,7 @@ def test_run_table_is_the_axes_plus_the_score():
 
 
 def test_run_table_sorts_by_best_not_final():
-    """The best checkpoint is keyed on the min, so the leaderboard is too."""
+    """The best checkpoint is chosen by the min, so the leaderboard is too."""
     runs = frame([run("worse", 1e-3, 0, 2.5), run("better", 3e-4, 0, 2.4)])
     assert list(run_table(runs)["run_id"]) == ["better", "worse"]
 
@@ -146,8 +145,8 @@ def test_seed_groups_keeps_the_axes_so_a_row_says_what_it_is():
 
 
 def test_a_single_seed_has_no_spread():
-    """NaN rather than 0.0: one seed has no spread, and the difference is the
-    whole argument for the >= 3 seeds rule."""
+    """NaN rather than 0.0: one seed has no spread, which is why you want at
+    least 3."""
     runs = frame([run("a", 1e-3, 0, 2.5)])
     out = seed_groups(runs)
 

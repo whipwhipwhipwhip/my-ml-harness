@@ -16,11 +16,11 @@ import pandas as pd
 def flatten_dict(d: dict, prefix: str = "") -> dict:
     """`{"model": {"n_layer": 4}}` -> `{"model.n_layer": 4}`.
 
-    Lives here rather than in a shared utils package so `ml_harness/` depends on
-    nothing outside its own directory. Its one caller is `load_runs`, where it
-    turns a nested config into the flat columns that make `df["config.optim.lr"]`
-    a thing you can group by — the dotted names deliberately match what `--set`
-    takes, so the column you sorted by is the flag you'd vary.
+    Lives here rather than in a shared utils package so `ml_harness/` doesn't
+    depend on anything outside its own directory. It's used by `load_runs` to
+    turn a nested config into flat columns like `df["config.optim.lr"]` that you
+    can group by. The dotted names match what `--set` takes, so a column name is
+    also the flag you'd use to change it.
     """
     out = {}
 
@@ -71,9 +71,9 @@ class RunDir:
     def tokenizer_path(self) -> Path:
         """The tokenizer's reconstruction recipe.
 
-        Without it a checkpoint is an undecodable pile of integers: `*.txt` is
-        gitignored, so for a corpus-derived vocabulary there is otherwise no
-        record anywhere of what id 7 meant.
+        Without it a checkpoint's ids can't be decoded: `*.txt` is gitignored,
+        so for a vocabulary built from the corpus there's no other record of
+        what id 7 meant.
         """
         return self.path / "tokenizer.json"
 
@@ -136,9 +136,9 @@ def load_runs(root: Path) -> pd.DataFrame:
         if not run_dir.is_dir():
             continue
 
-        # `runs/smoke_tests/` is a directory *of* runs, not a run. config.json is
-        # the marker: new_run writes it before anything else, so a directory
-        # without one was never a run and would arrive as a row of NaNs.
+        # `runs/smoke_tests/` is a directory *of* runs, not a run. new_run
+        # writes config.json first, so a directory without one isn't a run (and
+        # would otherwise show up as a row of NaNs).
         if not (run_dir / "config.json").exists():
             continue
 

@@ -1,14 +1,13 @@
 """GPT-2's weight decay split: dim >= 2 decays, everything else doesn't.
 
-Cheapest tier — a model, an optimiser, and its `param_groups`. No filesystem
-beyond the synthesised config and no training: the partition is a fact about the
-optimiser the moment it is built, and stepping it would only make the same
-assertion slower.
+Cheap tests: a model, an optimiser, and its `param_groups`. No filesystem
+beyond the generated config and no training, since the split is fixed as soon
+as the optimiser is built.
 
-`testing.TinyModel` is the model under test rather than a stub, and it earns
-that: it has both kinds of tensor — weight matrices and embeddings on one side,
-LayerNorm gains and biases on the other — so the split has something real to get
-wrong. A stub with one embedding would pass a broken implementation.
+These use `testing.TinyModel` rather than a stub because it has both kinds of
+tensor (weight matrices and embeddings, plus LayerNorm gains and biases), so the
+split has something to get wrong. A stub with only an embedding would pass even
+if the split were broken.
 """
 
 from __future__ import annotations
@@ -30,7 +29,7 @@ VOCAB = 65
 
 @pytest.fixture
 def built(config_path):
-    """(cfg, model) for the reference arch. No data — the split is shape-only."""
+    """(cfg, model) for the reference arch. No data needed; the split only uses shapes."""
 
     def build(*overrides):
         cfg = load_run_config(config_path, ARCHES, DATAS, overrides)
@@ -42,9 +41,8 @@ def built(config_path):
 # ---- the partition --------------------------------------------------------
 
 def test_every_parameter_lands_in_exactly_one_group(built):
-    """The failure this exists for is a parameter in neither group: it would
-    train — the other group's gradients still flow — but never be updated, and
-    nothing anywhere would say so."""
+    """The bug to catch is a parameter in neither group: it would get
+    gradients but never be updated, and nothing would tell you."""
     _, model = built()
     groups = decay_param_groups(model, 0.1)
 
@@ -69,17 +67,17 @@ def test_the_undecayed_group_is_the_biases_and_gains(built):
 
 
 def test_biases_and_gains_get_exactly_zero(built):
-    """0.0 rather than "small": the point of the split is that these are not
-    regularised at all, and a near-zero would be a different claim."""
+    """Exactly 0.0, not just small: the point is that these aren't
+    regularised at all."""
     _, model = built()
     _, no_decay = decay_param_groups(model, 0.1)
     assert no_decay["weight_decay"] == 0.0
 
 
 def test_frozen_parameters_are_left_out(built):
-    """A frozen tensor has no gradient, but AdamW's decay isn't a gradient — it
-    is applied to the parameter directly, so a frozen weight in a decayed group
-    would shrink every step while claiming to be frozen."""
+    """A frozen tensor has no gradient, but AdamW's decay is applied to the
+    parameter directly, so a frozen weight in a decayed group would still
+    shrink every step."""
     _, model = built()
     frozen = next(p for p in model.parameters() if p.dim() >= 2)
     frozen.requires_grad_(False)
@@ -91,10 +89,10 @@ def test_frozen_parameters_are_left_out(built):
 
 
 def test_a_tied_weight_is_decayed_once(built):
-    """Weight tying is why this goes through `model.parameters()`, which
-    de-duplicates shared tensors, rather than `named_parameters()` collected by
-    name. Tied and counted twice, an embedding decays at double the configured
-    rate — a bug that looks like a badly chosen hyperparameter."""
+    """Weight tying is why this uses `model.parameters()`, which skips
+    duplicate tensors, rather than collecting `named_parameters()` by name. If a
+    tied embedding were counted twice it would decay at double the rate, which
+    would look like a badly chosen hyperparameter."""
 
     class Tied(nn.Module):
         def __init__(self):
@@ -116,16 +114,16 @@ def test_the_configured_decay_reaches_the_optimiser(built):
 
 
 def test_the_default_is_the_gpt2_value(built):
-    """0.1, and deliberately not torch's silent 0.01 — which is what every run
-    recorded before this field trained under, on every parameter."""
+    """0.1, not torch's default of 0.01 (which is what runs from before this
+    field used, on every parameter)."""
     cfg, model = built()
     assert cfg.optim.weight_decay == 0.1
     assert build_optimiser(cfg, model).param_groups[0]["weight_decay"] == 0.1
 
 
 def test_zero_decay_still_splits_the_groups(built):
-    """Turning decay off is a value, not a mode: the grouping is unconditional,
-    so `weight_decay=0` and the default differ in one number and nothing else."""
+    """Turning decay off is just a value: the groups are always built, so
+    `weight_decay=0` and the default differ in one number and nothing else."""
     cfg, model = built("optim.weight_decay=0")
     optimiser = build_optimiser(cfg, model)
     assert [g["weight_decay"] for g in optimiser.param_groups] == [0.0, 0.0]
@@ -133,16 +131,16 @@ def test_zero_decay_still_splits_the_groups(built):
 
 
 def test_negative_decay_is_rejected_at_load(built):
-    """It grows the weights every step; the run diverges slowly enough to look
-    like a badly chosen learning rate."""
+    """Negative decay grows the weights every step, and the run diverges
+    slowly enough to look like a bad learning rate."""
     with pytest.raises(ValueError, match="weight_decay"):
         built("optim.weight_decay=-0.1")
 
 
 def test_a_bare_parameter_iterable_still_gets_the_configured_decay(built):
     """`_build_adamw` passes `weight_decay` as the constructor default as well
-    as through the groups. A caller that builds an optimiser by hand — a
-    downstream project, a test — should get the config's value, not torch's."""
+    as through the groups, so someone building an optimiser by hand (a project,
+    a test) gets the config's value rather than torch's."""
     from ml_harness.registry import OPTIMS
 
     cfg, model = built("optim.weight_decay=0.3")
@@ -153,9 +151,9 @@ def test_a_bare_parameter_iterable_still_gets_the_configured_decay(built):
 # ---- what the split means for the rest of the loop ------------------------
 
 def test_the_schedule_reaches_both_groups(built):
-    """The loop writes the scheduled lr into every param group, which is the
-    property that makes two of them safe. Asserted here against the real split
-    rather than the hand-added group in test_loop.py."""
+    """The loop writes the scheduled lr into every param group, which is what
+    makes having two groups safe. Checked here against the real split, rather
+    than the hand-added group in test_loop.py."""
     from ml_harness.loop import train
     from ml_harness.testing import FakeLogger, SpyEval
 

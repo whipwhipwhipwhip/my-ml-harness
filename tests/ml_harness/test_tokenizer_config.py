@@ -1,9 +1,9 @@
 """`tokenizer_arch` as a discriminator: the tag -> the config class -> the object.
 
-Cheapest tier — a config dict and a short string, no run directory and no GPT.
-The question here is only "does the tag select the right thing, and does a wrong
-tag fail loudly"; whether the tokenizers themselves are correct is
-`tests/tokenizers/`.
+Cheap tests: a config dict and a short string, no run directory and no GPT.
+These only check that the tag picks the right thing and that a wrong tag fails
+clearly. Whether the tokenizers themselves are correct is tested in the
+`tokenizers` package.
 """
 
 from __future__ import annotations
@@ -48,8 +48,8 @@ def load(config_path, arch, extra=()):
 
 
 def test_every_registered_tokenizer_has_a_case():
-    """If this fails someone added a tokenizer without a test — which is the
-    point of asserting on the table rather than listing the names twice."""
+    """If this fails, someone added a tokenizer without a test case. That's why
+    this checks against the table rather than listing the names again."""
     assert set(CASES) == set(TOKENIZERS)
 
 
@@ -75,7 +75,7 @@ def test_char_reads_its_alphabet_off_the_corpus(config_path):
 
 
 def test_char_fixed_ignores_the_corpus(config_path):
-    """The whole reason it's a separate entry: same corpus, stated alphabet."""
+    """The reason it's a separate entry: the alphabet is given, not read from the corpus."""
     tok = build_tokenizer(load(config_path, "char_fixed"), CORPUS)
     assert tok.alphabet == "abc"
 
@@ -93,9 +93,9 @@ def test_tiktoken_arrives_already_trained(config_path):
 
 # ---- special tokens -------------------------------------------------------
 #
-# That they encode correctly is `tests/tokenizers/`; the question here is only
-# whether the config block reaches the tokenizer, since these change vocab_size
-# and therefore the shape of the checkpoint.
+# Whether they encode correctly is tested in the `tokenizers` package. Here we
+# only check the config reaches the tokenizer, since special tokens change
+# vocab_size and so the shape of the checkpoint.
 
 def test_regex_bpe_specials_come_from_the_config(config_path):
     cfg = load(config_path, "regex_bpe", ['tokenizer.special_tokens=["<|eot|>"]'])
@@ -106,7 +106,7 @@ def test_regex_bpe_specials_come_from_the_config(config_path):
 
 
 def test_tiktoken_specials_come_from_the_config(config_path):
-    """The 50256-vs-50257 decision, made in a config file rather than in code."""
+    """Whether GPT-2 has 50256 or 50257 ids is set in the config, not in code."""
     cfg = load(
         config_path, "tiktoken", ['tokenizer.special_tokens=["<|endoftext|>"]']
     )
@@ -116,15 +116,15 @@ def test_tiktoken_specials_come_from_the_config(config_path):
 
 
 def test_declaring_no_specials_is_the_default(config_path):
-    """Both BPE configs default to none, so an existing config file means what it
-    always meant — opting in is what grows the vocabulary."""
+    """Both BPE configs default to none, so existing config files don't change.
+    The vocabulary only grows if you ask for special tokens."""
     assert load(config_path, "regex_bpe").tokenizer.special_tokens is None
     assert load(config_path, "tiktoken").tokenizer.special_tokens is None
 
 
 def test_a_special_the_encoding_does_not_define_is_rejected(config_path):
-    """Caught at build time, not silently added: tiktoken's ids aren't ours to
-    invent. Worth a config-level test because the config is where the typo goes."""
+    """Caught at build time rather than silently added, since we can't make up
+    tiktoken ids. Tested at the config level because that's where typos happen."""
     cfg = load(config_path, "tiktoken", ['tokenizer.special_tokens=["<|eot|>"]'])
 
     with pytest.raises(ValueError, match="no special token"):
@@ -133,10 +133,10 @@ def test_a_special_the_encoding_does_not_define_is_rejected(config_path):
 
 # ---- vocabulary padding ---------------------------------------------------
 #
-# On the base config, so it reaches every arch. That the padded ids behave (are
-# unreachable, decode to nothing) is `tests/tokenizers/`; what's asked here is
-# whether the number in the config file reaches the tokenizer, since it sizes
-# the embedding table and therefore the checkpoint.
+# On the base config, so every tokenizer gets it. How padded ids behave is
+# tested in the `tokenizers` package; here we only check the number in the
+# config reaches the tokenizer, since it sets the size of the embedding table
+# and so the checkpoint.
 
 @pytest.mark.parametrize("arch", list(CASES))
 def test_padding_reaches_every_tokenizer(config_path, arch):
@@ -149,14 +149,14 @@ def test_padding_reaches_every_tokenizer(config_path, arch):
 
 
 def test_padding_is_off_by_default(config_path):
-    """An existing config file means what it always meant."""
+    """Existing config files don't change."""
     assert load(config_path, "char").tokenizer.pad_vocab_to is None
 
 
 def test_gpt2_with_endoftext_pads_to_50304(config_path):
-    """The case padding exists for: GPT-2's 50256 ranks, plus the one special
-    that takes it to 50257, reported as 64 x 786 so the matmuls either side of
-    the model get a shape they like."""
+    """The main use case: GPT-2's 50256 tokens, plus one special token to make
+    50257, padded to 64 x 786 so the matmuls at either end of the model get a
+    GPU-friendly shape."""
     cfg = load(
         config_path,
         "tiktoken",
@@ -169,8 +169,9 @@ def test_gpt2_with_endoftext_pads_to_50304(config_path):
 
 
 def test_padding_survives_the_recipe(config_path):
-    """`to_dict` is what `runs/<id>/tokenizer.json` holds, so a padding it
-    dropped would be a checkpoint whose embedding table no longer fits."""
+    """`to_dict` is what gets saved to `runs/<id>/tokenizer.json`, so if it
+    dropped the padding, the rebuilt tokenizer wouldn't match the checkpoint's
+    embedding table."""
     cfg = load(config_path, "tiktoken", ["tokenizer.pad_vocab_to=50304"])
     tok = build_tokenizer(cfg, CORPUS)
 
@@ -178,13 +179,12 @@ def test_padding_survives_the_recipe(config_path):
 
 
 def test_padding_below_the_real_vocabulary_is_rejected(config_path):
-    """Not silently ignored: a config asking for fewer ids than exist is a
-    statement about the embedding table that isn't true.
+    """Not silently ignored: a config asking for fewer ids than exist is
+    asking for an embedding table that's too small.
 
-    Raised when `vocab_size` is read rather than when the tokenizer is built,
-    which is the tokenizers package's choice, not ours. Still early enough: an
-    entry point reads it to size the model, which is before `record_run` has put
-    a directory on disk."""
+    The tokenizers package raises when `vocab_size` is read rather than when
+    the tokenizer is built. That's still early enough, since an entry point
+    reads it to size the model before `record_run` creates a directory."""
     tok = build_tokenizer(
         load(config_path, "tiktoken", ["tokenizer.pad_vocab_to=100"]), CORPUS
     )
@@ -211,8 +211,8 @@ def test_a_missing_tokenizer_arch_names_the_options(config_path, tmp_path):
 
 
 def test_a_typo_in_the_tokenizer_block_is_caught_by_strict(config_path):
-    """Same payoff as everywhere else: `alphabt=abc` is a load error, not a
-    silently ignored hyperparameter."""
+    """As everywhere else, `alphabt=abc` is a load error, not a silently
+    ignored setting."""
     with pytest.raises(DaciteError):
         load_run_config(
             config_path, ARCHES, DATAS, ["tokenizer_arch=char_fixed", "tokenizer.alphabt=abc"]
@@ -226,7 +226,7 @@ def test_a_missing_required_field_is_caught(config_path):
 
 
 def test_a_field_from_the_wrong_tokenizer_is_caught(config_path):
-    """`char` takes no options, so an alphabet on it is a mistake worth hearing
-    about — the run it describes isn't the run it would have done."""
+    """`char` takes no options, so giving it an alphabet is a mistake you'd
+    want to know about: the run wouldn't use it."""
     with pytest.raises(DaciteError):
         load_run_config(config_path, ARCHES, DATAS, ["tokenizer.alphabet=abc"])

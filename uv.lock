@@ -360,9 +360,9 @@ version = "0.0.6"
 source = { editable = "." }
 dependencies = [
     { name = "dacite" },
+    { name = "nanotok" },
     { name = "numpy" },
     { name = "pandas" },
-    { name = "tokenizers" },
     { name = "torch" },
 ]
 
@@ -374,9 +374,9 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "dacite" },
+    { name = "nanotok", git = "ssh://git@github.com/whipwhipwhipwhip/my-tokenizers.git?tag=v0.0.4" },
     { name = "numpy", specifier = ">=2.2.6" },
     { name = "pandas", specifier = ">=2.3.3" },
-    { name = "tokenizers", git = "ssh://git@github.com/whipwhipwhipwhip/my-tokenizers.git?tag=v0.0.2" },
     { name = "torch" },
 ]
 
@@ -390,6 +390,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/e0/47/dd32fa426cc72114383ac549964eecb20ecfd886d1e5ccf5340b55b02f57/mpmath-1.3.0.tar.gz", hash = "sha256:7a28eb2a9774d00c7bc92411c19a89209d5da7c4c9a9e227be8330a23a25b91f", size = 508106, upload-time = "2023-03-07T16:47:11.061Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/43/e3/7d92a15f894aa0c9c4b49b8ee9ac9850d6e63b03c9c32c0367a13ae62209/mpmath-1.3.0-py3-none-any.whl", hash = "sha256:a0b2b9fe80bbcd81a6647ff13108738cfb482d481d826cc0e02f5b35e5c88d2c", size = 536198, upload-time = "2023-03-07T16:47:09.197Z" },
+]
+
+[[package]]
+name = "nanotok"
+version = "0.0.4"
+source = { git = "ssh://git@github.com/whipwhipwhipwhip/my-tokenizers.git?tag=v0.0.4#88c341893527dfbc230542def223f94140ef3e61" }
+dependencies = [
+    { name = "regex" },
+    { name = "tiktoken" },
 ]
 
 [[package]]
@@ -912,16 +921,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/4e/f6/80760e98a08e6649d2d68afb6035af713121dfb615acce8c4f73810ec438/tiktoken-0.14.0-cp315-cp315t-musllinux_1_2_aarch64.whl", hash = "sha256:86f66c85e796f5d05d5c4a60ec1d40cbfebc47a32464053528c797163fa9ab89", size = 1251479, upload-time = "2026-08-17T19:49:36.419Z" },
     { url = "https://files.pythonhosted.org/packages/c5/84/50966fb6918a0fb9b32721277e5342bf729a2d74350074d662fbedf9772e/tiktoken-0.14.0-cp315-cp315t-musllinux_1_2_x86_64.whl", hash = "sha256:149d97453c4c98c04b081d64a85e635921269b532710d6faf81e9e82b790e7d3", size = 1316673, upload-time = "2026-08-17T19:49:37.756Z" },
     { url = "https://files.pythonhosted.org/packages/35/5e/9b01afd037bfa22a0033963fa091e0f75b6fb15cd85bffb42ff86e697323/tiktoken-0.14.0-cp315-cp315t-win_amd64.whl", hash = "sha256:561e7580f84a79859af1ef6f676968e9030fcc3fe195700b15235bca64f009c9", size = 987929, upload-time = "2026-08-17T19:49:38.947Z" },
-]
-
-[[package]]
-name = "tokenizers"
-version = "0.0.2"
-source = { git = "ssh://git@github.com/whipwhipwhipwhip/my-tokenizers.git?tag=v0.0.2#d389a0bd1df2fa4547b7ea2faf93144f405423c5" }
-dependencies = [
-    { name = "pytest" },
-    { name = "regex" },
-    { name = "tiktoken" },
 ]
 
 [[package]]

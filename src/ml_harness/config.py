@@ -294,7 +294,7 @@ class TokenizerConfig:
     # GPU-friendly size: 50257 is awkward, while 50304 is 64 x 786. The
     # tokenizer owns this rather than the model because `vocab_size` is what the
     # embedding table is built from, so if the model padded on its own the two
-    # would disagree. See `tokenizers.base.pad_vocab_size`. It's also saved in
+    # would disagree. See `nanotok.base.pad_vocab_size`. It's also saved in
     # `to_dict` and so in the fingerprint, which keeps padded and unpadded runs
     # from sharing a cache entry.
     #

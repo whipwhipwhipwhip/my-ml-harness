@@ -3,7 +3,7 @@
 Cheap tests: a config dict and a short string, no run directory and no GPT.
 These only check that the tag picks the right thing and that a wrong tag fails
 clearly. Whether the tokenizers themselves are correct is tested in the
-`tokenizers` package.
+`nanotok` package.
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ from ml_harness.config import (
     TiktokenConfig,
 )
 from ml_harness.registry import TOKENIZERS, build_tokenizer, load_run_config
-from tokenizers import (
+from nanotok import (
     ByteTokenizer,
     CharTokenizer,
     RegexTokenizer,
@@ -93,7 +93,7 @@ def test_tiktoken_arrives_already_trained(config_path):
 
 # ---- special tokens -------------------------------------------------------
 #
-# Whether they encode correctly is tested in the `tokenizers` package. Here we
+# Whether they encode correctly is tested in the `nanotok` package. Here we
 # only check the config reaches the tokenizer, since special tokens change
 # vocab_size and so the shape of the checkpoint.
 
@@ -134,7 +134,7 @@ def test_a_special_the_encoding_does_not_define_is_rejected(config_path):
 # ---- vocabulary padding ---------------------------------------------------
 #
 # On the base config, so every tokenizer gets it. How padded ids behave is
-# tested in the `tokenizers` package; here we only check the number in the
+# tested in the `nanotok` package; here we only check the number in the
 # config reaches the tokenizer, since it sets the size of the embedding table
 # and so the checkpoint.
 
@@ -182,7 +182,7 @@ def test_padding_below_the_real_vocabulary_is_rejected(config_path):
     """Not silently ignored: a config asking for fewer ids than exist is
     asking for an embedding table that's too small.
 
-    The tokenizers package raises when `vocab_size` is read rather than when
+    The nanotok package raises when `vocab_size` is read rather than when
     the tokenizer is built. That's still early enough, since an entry point
     reads it to size the model before `record_run` creates a directory."""
     tok = build_tokenizer(

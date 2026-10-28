@@ -9,7 +9,7 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
-from tokenizers import Tokenizer, fingerprint
+from nanotok import Tokenizer, fingerprint
 
 
 def git(REPO_ROOT, *args: str) -> str | None:
@@ -82,7 +82,7 @@ GROUP_EXCLUDES: tuple[tuple[str, ...], ...] = (
 def _sha256_json(obj: Any) -> str:
     """sha256 of a canonical JSON rendering.
 
-    `sort_keys` for the same reason `tokenizers.fingerprint` uses it: the hash
+    `sort_keys` for the same reason `nanotok.fingerprint` uses it: the hash
     shouldn't depend on dict order, which can change on a round trip through a
     file. `asdict` order is stable today, but nothing guarantees it.
     """
@@ -155,13 +155,13 @@ def collect_provenance(
         "git_dirty": find_git_dirty(REPO_ROOT),
         "torch_version": torch.__version__,
         # The two dependencies whose code changes what a run *means*, not just
-        # how fast it is. `tokenizers` is a separate package, so a change to
+        # how fast it is. `nanotok` is a separate package, so a change to
         # its merge loop doesn't show up in this repo's history, and two runs
         # with the same corpus and `tokenizer_sha256` could still have been
         # encoded by different code. The fingerprint covers the recipe; this
         # covers the code that reads it.
         "harness_version": _dist_version(HARNESS_DISTRIBUTION),
-        "tokenizers_version": _dist_version("tokenizers"),
+        "tokenizers_version": _dist_version("nanotok"),
         "device_resolved": device,
         "vocab_size": vocab_size,
         "data_sha256": sha256,

@@ -11,7 +11,7 @@ This module only has the mechanism. The `ARCHES` table lives in the project
 that defines the models and is passed in as an argument, so nothing here names a
 specific model. `DATAS` is passed in the same way, since a dataset config can be
 specific to a task. `OPTIMS`, `TOKENIZERS` and `SCHEDULES` do live here, because
-torch's optimisers, the `tokenizers` package and the schedule maths aren't
+torch's optimisers, the `nanotok` package and the schedule maths aren't
 specific to any project. The rule is: this package never has to name a *model*
 or a *task*.
 
@@ -59,7 +59,7 @@ from ml_harness.schedule import (
     constant_schedule,
     cosine_schedule,
 )
-from tokenizers import (
+from nanotok import (
     NO_SPLIT_PATTERN,
     ByteTokenizer,
     CharTokenizer,

@@ -2,7 +2,7 @@
 
 Copied from `utils/io.py` in the repo this was extracted from, rather than
 imported, so that `ml_harness/` depends on nothing outside its own directory
-(plus the `tokenizers` package). That's what made it possible to split this
+(plus the `nanotok` package). That's what made it possible to split this
 package out, and ~30 duplicated lines are cheaper than a shared utils package.
 
 Both functions are about what a killed process leaves behind:

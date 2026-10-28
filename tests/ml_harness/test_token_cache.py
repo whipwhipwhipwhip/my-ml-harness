@@ -20,7 +20,7 @@ import torch
 from ml_harness import cache as cache_mod
 from ml_harness.testing import load_data
 from ml_harness.cache import cache_path, load_tokens, save_tokens
-from tokenizers import ByteTokenizer, CharTokenizer, fingerprint
+from nanotok import ByteTokenizer, CharTokenizer, fingerprint
 
 TEXT = "the theatre of the theory " * 20
 
@@ -83,7 +83,7 @@ def test_the_version_is_in_the_filename(monkeypatch):
 
 def test_the_encoder_version_is_in_the_filename(monkeypatch):
     """The same gap from the other side. `CACHE_VERSION` is bumped by hand for
-    changes here, but `tokenizers` is a separate package, so a fix to its merge
+    changes here, but `nanotok` is a separate package, so a fix to its merge
     loop wouldn't show up in this repo at all."""
     before = cache_path("/c", "d" * 64, "t" * 64)
     monkeypatch.setattr(cache_mod, "_ENCODER_VERSION", "9.9.9")

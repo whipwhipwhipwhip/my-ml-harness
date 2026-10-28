@@ -13,7 +13,7 @@ describe the *inputs* to encoding, not the code that does it. Fix a bug in
 `apply_merges` and every cached file is silently out of date, because the corpus
 and the tokenizer recipe haven't changed.
 
-The encoding code lives in the separate `tokenizers` package, so
+The encoding code lives in the separate `nanotok` package, so
 `_ENCODER_VERSION` picks up its changes automatically, and `CACHE_VERSION` is
 bumped by hand for changes in this repo. Forgetting to bump it is still the
 thing to watch out for.
@@ -42,12 +42,12 @@ def _encoder_version() -> str:
     "unknown" rather than None if nothing is installed, so the key is still a
     readable filename and at least stays the same between runs.
 
-    One weakness: two commits of `tokenizers` with the same version number look
+    One weakness: two commits of `nanotok` with the same version number look
     the same here. The lockfile pins the commit, but this only sees the version
     string. It's a smaller gap than the one it closes, but still a gap.
     """
     try:
-        return version("tokenizers")
+        return version("nanotok")
     except PackageNotFoundError:
         return "unknown"
 

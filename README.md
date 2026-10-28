@@ -97,6 +97,6 @@ uv sync
 uv run pytest
 ```
 
-The dependencies are numpy, pandas, torch, dacite, and my own tokenizer package (pinned in [pyproject.toml](pyproject.toml); HuggingFace's `tokenizers` on PyPI is a different thing with the same name).
+The dependencies are numpy, pandas, torch, dacite, and my tokenizer package [nanotok](https://github.com/whipwhipwhipwhip/nanotok) (pinned to a git tag in [pyproject.toml](pyproject.toml)).
 
 The suite takes a few seconds and doesn't need a GPU or any real data: the config and a small corpus are generated into a temp directory. Most tests are pure config/maths checks, or drive the loop with a nine-line stub model and a fake logger. If a loop test ever needs a real model or a filesystem, the loop has picked up a dependency it shouldn't have. The slower tests do real runs with `testing.run` and check what ends up in the run record (dtypes under autocast, that a compiled model's checkpoint still loads, that a sweep produces readable runs). Data parallelism is tested without ever starting a process group. Whether NCCL/gloo actually move the data needs a real multi-process run, which is left to the projects that launch one.

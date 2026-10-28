@@ -33,7 +33,7 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
-from tokenizers import CharTokenizer, Tokenizer, fingerprint
+from nanotok import CharTokenizer, Tokenizer, fingerprint
 
 from ml_harness.cache import cache_path, load_tokens, save_tokens
 from ml_harness.config import DataConfig, FileDataConfig, ModelConfig

@@ -7,8 +7,8 @@ dependencies = [
     "pandas>=2.3.3",
     "torch",
     "dacite",
-    # the local package, not HuggingFace's
-    "tokenizers",
+    # my tokenizer package (github.com/whipwhipwhipwhip/nanotok)
+    "nanotok",
 ]
 
 [dependency-groups]
@@ -22,4 +22,4 @@ build-backend = "uv_build"
 pythonpath = ["."]
 
 [tool.uv.sources]
-tokenizers = {git = "ssh://git@github.com/whipwhipwhipwhip/my-tokenizers.git", tag="v0.0.2" }
+nanotok = {git = "ssh://git@github.com/whipwhipwhipwhip/my-tokenizers.git", tag="v0.0.4" }

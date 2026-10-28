@@ -31,3 +31,4 @@ runs/
 *.txt
 # token cache
 .cache/
+CLAUDE.md
